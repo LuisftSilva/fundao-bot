@@ -15,6 +15,9 @@
     "RESIOT_BASE": "https://fundaodigital.pt",
     "RESIOT_VAR_NAME": "CACHE_GATEWAYS_STATUS"   // põe o nome completo
   	}
+
+	
+
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
