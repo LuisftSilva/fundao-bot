@@ -6,10 +6,15 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "fundao-bot",
 	"main": "src/index.js",
+	"account_id": "4d122b13e861256de755aedd243e96ee",
 	"compatibility_date": "2025-09-21",
 	"observability": {
 		"enabled": true
-	}
+	},
+	"vars": {
+    "RESIOT_BASE": "https://fundaodigital.pt",
+    "RESIOT_VAR_NAME": "CACHE_GATEWAYS_STATUS"   // põe o nome completo
+  	}
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
