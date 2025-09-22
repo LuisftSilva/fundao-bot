@@ -1,0 +1,11 @@
+BASE="https://fundaodigital.pt"
+TOKEN="f59dcd3fdfa76446ea8ac1586cea8b72"
+
+# 1) Tenta tipos comuns de heartbeat
+for t in comm_gwalive comm_basestation_alive comm_gwmonitor gw_alive basestation_alive ; do
+  echo "=== $t ==="
+  curl -s "$BASE/api/log?logType=$t&from=2025-09-01%2000:00:00&to=2025-09-21%2023:59:59&limit=5&offset=0" \
+    -H "Accept: application/json" \
+    -H "Grpc-Metadata-Authorization: $TOKEN"
+  echo; echo
+done
