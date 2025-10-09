@@ -11,7 +11,7 @@
 
   // Vars de texto (segredos ficam fora deste ficheiro)
   "vars": {
-    "RESIOT_BASE": "https://fundaodigital.pt",
+    "RESIOT_BASE": "https://ns.fundaodigital.pt",
     "RESIOT_VAR_NAME": "CACHE_GATEWAYS_STATUS"
   }
 }
