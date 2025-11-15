@@ -17,7 +17,7 @@ const MENU_KEYBOARD = {
 	resize_keyboard: true,
 	one_time_keyboard: false,
 };
-const HISTORY_PROMPTS = new Map(); // chatId -> awaiting history params
+const HISTORY_PROMPTS = new Map(); // chatId -> { stage: "await_idx" | "await_days", idx?: number }
 
 // ---- Uptime storage (Gist) ----
 // Snapshot "agora":
@@ -295,42 +295,31 @@ async function handleAdminCallback(update, env) {
 async function handleCommand(chatId, textIn, env, NAME_MAP) {
 	const chatKey = chatId ? String(chatId) : "";
 	let commandText = (textIn || "").trim();
-	const awaitingHistory = chatKey && HISTORY_PROMPTS.has(chatKey);
+	const historyState = chatKey ? HISTORY_PROMPTS.get(chatKey) : null;
 
 	const shortcut = detectMenuShortcut(commandText);
 	if (shortcut === "status") {
+		if (chatKey) HISTORY_PROMPTS.delete(chatKey);
 		commandText = "/status";
 	} else if (shortcut === "history") {
-		if (chatKey) HISTORY_PROMPTS.set(chatKey, true);
-		return [{ text: historyPromptMessage(), reply_markup: MENU_KEYBOARD }];
+		if (chatKey) HISTORY_PROMPTS.set(chatKey, { stage: "await_idx" });
+		return [historyAskIdxMessage()];
 	}
 
-	if (awaitingHistory) {
-		if (!commandText) {
-			return [{ text: historyPromptMessage(), reply_markup: MENU_KEYBOARD }];
+	if (historyState && !commandText.startsWith("/")) {
+		if (historyState.stage === "await_idx") {
+			return handleHistoryIdxInput(chatKey, commandText);
 		}
-		if (!commandText.startsWith("/")) {
-			return await handleHistoryInteractive(chatKey, commandText, env, NAME_MAP);
+		if (historyState.stage === "await_days") {
+			return await handleHistoryDaysInput(chatKey, commandText, historyState.idx, env, NAME_MAP);
 		}
+	} else if (historyState && commandText.startsWith("/")) {
 		HISTORY_PROMPTS.delete(chatKey);
 	}
 
 	if (commandText === "/start" || commandText === "/help") {
 		HISTORY_PROMPTS.delete(chatKey);
-		return [{
-			text: [
-				"<b>Commands</b>",
-				"• <code>/status</code> — all gateways",
-				"• <code>/status_ok</code> — only ✅",
-				"• <code>/status_nok</code> — only ❌",
-				"• <code>/history &lt;#idx&gt; [dias]</code> — uptime/downtime histórico",
-				"  Ex: <code>/history 7</code> (7 dias) ou <code>/history 7 30</code> (30 dias)",
-				"• <code>/ping</code> — test",
-				"",
-				"Também podes tocar nos botões abaixo."
-			].join("\n"),
-			reply_markup: MENU_KEYBOARD,
-		}];
+		return [{ text: "\u200b", reply_markup: MENU_KEYBOARD }];
 	}
 	if (commandText === "/ping") return ["<b>pong</b>"];
 
@@ -398,17 +387,89 @@ async function handleCommand(chatId, textIn, env, NAME_MAP) {
 	if (commandText?.startsWith("/history")) {
 		const parts = commandText.split(/\s+/).filter(Boolean);
 		const idx = Number(parts[1]);
-		let days = Number(parts[2] || 7);
-		if (!Number.isFinite(days) || days <= 0) days = 7;
-		days = Math.max(1, Math.min(90, days));
+		let days = Number(parts[2]);
 		if (!Number.isFinite(idx) || idx <= 0) {
-			if (chatKey) HISTORY_PROMPTS.set(chatKey, true);
-			return [{ text: historyPromptMessage(), reply_markup: MENU_KEYBOARD }];
+			if (chatKey) HISTORY_PROMPTS.set(chatKey, { stage: "await_idx" });
+			return [historyAskIdxMessage()];
 		}
+		if (!Number.isFinite(days) || days <= 0) {
+			if (chatKey) HISTORY_PROMPTS.set(chatKey, { stage: "await_days", idx });
+			return [historyAskDaysMessage(idx)];
+		}
+		HISTORY_PROMPTS.delete(chatKey);
+		days = clampDays(days);
 		return fulfillHistoryRequest(idx, days, env, NAME_MAP);
 	}
 
 	return ["<i>Say</i> <code>/status</code> <i>to view the table</i>."];
+}
+
+function clampDays(days) {
+	return Math.max(1, Math.min(90, Math.round(days)));
+}
+
+function parseFirstPositiveNumber(input) {
+	const parts = String(input || "")
+		.split(/\s+/)
+		.map((p) => p.trim())
+		.filter(Boolean);
+	if (!parts.length) return null;
+	const num = Number(parts[0]);
+	if (!Number.isFinite(num) || num <= 0) return null;
+	return Math.floor(num);
+}
+
+function handleHistoryIdxInput(chatKey, rawText) {
+	const idx = parseFirstPositiveNumber(rawText);
+	if (!idx) {
+		return [{ text: historyInvalidIdxMessage(), reply_markup: MENU_KEYBOARD }];
+	}
+	HISTORY_PROMPTS.set(chatKey, { stage: "await_days", idx });
+	return [historyAskDaysMessage(idx)];
+}
+
+async function handleHistoryDaysInput(chatKey, rawText, idx, env, NAME_MAP) {
+	const days = parseFirstPositiveNumber(rawText);
+	if (!days) {
+		return [{ text: historyInvalidDaysMessage(), reply_markup: MENU_KEYBOARD }];
+	}
+	const clamped = clampDays(days);
+	HISTORY_PROMPTS.delete(chatKey);
+	return fulfillHistoryRequest(idx, clamped, env, NAME_MAP);
+}
+
+function historyAskIdxMessage() {
+	return {
+		text: [
+			"<b>Histórico</b>",
+			"Indica o número do gateway (consulta <code>/status</code> para ver a lista)."
+		].join("\n"),
+		reply_markup: MENU_KEYBOARD,
+	};
+}
+
+function historyAskDaysMessage(idx) {
+	return {
+		text: [
+			`<b>Gateway #${idx}</b>`,
+			"Quantos dias queres analisar? (1-90)"
+		].join("\n"),
+		reply_markup: MENU_KEYBOARD,
+	};
+}
+
+function historyInvalidIdxMessage() {
+	return [
+		"<i>Valor inválido.</i>",
+		"Escreve apenas o número do gateway (ex.: <code>7</code>)."
+	].join("\n");
+}
+
+function historyInvalidDaysMessage() {
+	return [
+		"<i>Dias inválidos.</i>",
+		"Indica apenas o número de dias (1-90)."
+	].join("\n");
 }
 
 async function fulfillHistoryRequest(idx, days, env, NAME_MAP) {
@@ -451,33 +512,6 @@ async function fulfillHistoryRequest(idx, days, env, NAME_MAP) {
 	logSlotsHourLines('history', start, slots, stepMin);
 
 	return formatUptimeReport(entry, days, rec, start, now, transitions);
-}
-
-async function handleHistoryInteractive(chatKey, rawInput, env, NAME_MAP) {
-	const parts = rawInput.split(/\s+/).filter(Boolean);
-	if (!parts.length) {
-		return [{ text: historyPromptMessage(), reply_markup: MENU_KEYBOARD }];
-	}
-	const idx = Number(parts[0]);
-	let days = Number(parts[1] || 7);
-	if (!Number.isFinite(idx) || idx <= 0) {
-		return [{
-			text: `<i>Número inválido.</i>\n\n${historyPromptMessage()}`,
-			reply_markup: MENU_KEYBOARD,
-		}];
-	}
-	if (!Number.isFinite(days) || days <= 0) days = 7;
-	days = Math.max(1, Math.min(90, days));
-	HISTORY_PROMPTS.delete(chatKey);
-	return fulfillHistoryRequest(idx, days, env, NAME_MAP);
-}
-
-function historyPromptMessage() {
-	return [
-		"<b>Histórico</b>",
-		"Indica: <code>&lt;#idx&gt; [dias]</code> — ex.: <code>7</code> (7 dias) ou <code>7 3</code> (3 dias).",
-		"Consulta <code>/status</code> para saber o número do gateway."
-	].join("\n");
 }
 
 function detectMenuShortcut(text) {
