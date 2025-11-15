@@ -13,11 +13,12 @@ const MENU_KEYBOARD = {
 			{ text: "📊 Status" },
 			{ text: "📈 Histórico" },
 		],
+		[{ text: "⏱️ Downtime" }],
 	],
 	resize_keyboard: true,
 	one_time_keyboard: false,
 };
-const HISTORY_PROMPTS = new Map(); // chatId -> { stage: "await_idx" | "await_days", idx?: number }
+const HISTORY_PROMPTS = new Map(); // chatId -> { type: "history"|"downtime", stage: string, idx?: number }
 
 // ---- Uptime storage (Gist) ----
 // Snapshot "agora":
@@ -285,25 +286,33 @@ async function handleAdminCallback(update, env) {
 async function handleCommand(chatId, textIn, env, NAME_MAP) {
 	const chatKey = chatId ? String(chatId) : "";
 	let commandText = (textIn || "").trim();
-	const historyState = chatKey ? HISTORY_PROMPTS.get(chatKey) : null;
+	const pendingState = chatKey ? HISTORY_PROMPTS.get(chatKey) : null;
 
 	const shortcut = detectMenuShortcut(commandText);
 	if (shortcut === "status") {
 		if (chatKey) HISTORY_PROMPTS.delete(chatKey);
 		commandText = "/status";
 	} else if (shortcut === "history") {
-		if (chatKey) HISTORY_PROMPTS.set(chatKey, { stage: "await_idx" });
+		if (chatKey) HISTORY_PROMPTS.set(chatKey, { type: "history", stage: "await_idx" });
 		return [historyAskIdxMessage()];
+	} else if (shortcut === "downtime") {
+		if (chatKey) HISTORY_PROMPTS.set(chatKey, { type: "downtime", stage: "await_days" });
+		return [downtimeAskDaysMessage()];
 	}
 
-	if (historyState && !commandText.startsWith("/")) {
-		if (historyState.stage === "await_idx") {
-			return handleHistoryIdxInput(chatKey, commandText);
+	if (pendingState && !commandText.startsWith("/")) {
+		if (pendingState.type === "history") {
+			if (pendingState.stage === "await_idx") {
+				return handleHistoryIdxInput(chatKey, commandText);
+			}
+			if (pendingState.stage === "await_days") {
+				return await handleHistoryDaysInput(chatKey, commandText, pendingState.idx, env, NAME_MAP);
+			}
 		}
-		if (historyState.stage === "await_days") {
-			return await handleHistoryDaysInput(chatKey, commandText, historyState.idx, env, NAME_MAP);
+		if (pendingState.type === "downtime" && pendingState.stage === "await_days") {
+			return await handleDowntimeDaysInput(chatKey, commandText, env, NAME_MAP);
 		}
-	} else if (historyState && commandText.startsWith("/")) {
+	} else if (pendingState && commandText.startsWith("/")) {
 		HISTORY_PROMPTS.delete(chatKey);
 	}
 
@@ -377,16 +386,28 @@ async function handleCommand(chatId, textIn, env, NAME_MAP) {
 		const idx = Number(parts[1]);
 		let days = Number(parts[2]);
 		if (!Number.isFinite(idx) || idx <= 0) {
-			if (chatKey) HISTORY_PROMPTS.set(chatKey, { stage: "await_idx" });
+			if (chatKey) HISTORY_PROMPTS.set(chatKey, { type: "history", stage: "await_idx" });
 			return [historyAskIdxMessage()];
 		}
 		if (!Number.isFinite(days) || days <= 0) {
-			if (chatKey) HISTORY_PROMPTS.set(chatKey, { stage: "await_days", idx });
+			if (chatKey) HISTORY_PROMPTS.set(chatKey, { type: "history", stage: "await_days", idx });
 			return [historyAskDaysMessage(idx)];
 		}
 		HISTORY_PROMPTS.delete(chatKey);
 		days = clampDays(days);
 		return fulfillHistoryRequest(idx, days, env, NAME_MAP);
+	}
+
+	if (commandText?.startsWith("/downtime")) {
+		const parts = commandText.split(/\s+/).filter(Boolean);
+		let days = Number(parts[1]);
+		if (!Number.isFinite(days) || days <= 0) {
+			if (chatKey) HISTORY_PROMPTS.set(chatKey, { type: "downtime", stage: "await_days" });
+			return [downtimeAskDaysMessage()];
+		}
+		HISTORY_PROMPTS.delete(chatKey);
+		days = clampDays(days);
+		return buildDowntimeReport(days, env, NAME_MAP);
 	}
 
 	return ["<i>Say</i> <code>/status</code> <i>to view the table</i>."];
@@ -412,7 +433,7 @@ function handleHistoryIdxInput(chatKey, rawText) {
 	if (!idx) {
 		return [{ text: historyInvalidIdxMessage(), reply_markup: MENU_KEYBOARD }];
 	}
-	HISTORY_PROMPTS.set(chatKey, { stage: "await_days", idx });
+	HISTORY_PROMPTS.set(chatKey, { type: "history", stage: "await_days", idx });
 	return [historyAskDaysMessage(idx)];
 }
 
@@ -454,6 +475,33 @@ function historyInvalidIdxMessage() {
 }
 
 function historyInvalidDaysMessage() {
+	return [
+		"<i>Dias inválidos.</i>",
+		"Indica apenas o número de dias (1-90)."
+	].join("\n");
+}
+
+async function handleDowntimeDaysInput(chatKey, rawText, env, NAME_MAP) {
+	const days = parseFirstPositiveNumber(rawText);
+	if (!days) {
+		return [{ text: downtimeInvalidDaysMessage(), reply_markup: MENU_KEYBOARD }];
+	}
+	const clamped = clampDays(days);
+	HISTORY_PROMPTS.delete(chatKey);
+	return buildDowntimeReport(clamped, env, NAME_MAP);
+}
+
+function downtimeAskDaysMessage() {
+	return {
+		text: [
+			"<b>Downtime</b>",
+			"Quantos dias queres analisar? (1-90)"
+		].join("\n"),
+		reply_markup: MENU_KEYBOARD,
+	};
+}
+
+function downtimeInvalidDaysMessage() {
 	return [
 		"<i>Dias inválidos.</i>",
 		"Indica apenas o número de dias (1-90)."
@@ -502,12 +550,48 @@ async function fulfillHistoryRequest(idx, days, env, NAME_MAP) {
 	return formatUptimeReport(entry, days, rec, start, now, transitions);
 }
 
+async function buildDowntimeReport(days, env, NAME_MAP) {
+	const list = await buildIndexList(env, NAME_MAP);
+	if (!list.ok) return [`<i>Falha a obter índice</i>: ${escapeHtml(list.err || "erro")}`];
+
+	const now = new Date();
+	const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+	const stepMin = (days <= 7 ? 5 : 60);
+
+	const rows = [];
+	for (const entry of list.items) {
+		const rec = await fetchSeriesForGateway(env, entry.gwEUI, start, now, stepMin);
+		if (!rec.ok) {
+			console.error('[downtime] error', { gwEUI: entry.gwEUI, err: rec.err });
+			return [`<i>Falha a calcular downtime</i>: ${escapeHtml(rec.err || "erro")} (${escapeHtml(entry.name)})`];
+		}
+		const pctUp = typeof rec.pctUp === "number" ? rec.pctUp : 0;
+		const downtimeMs = Math.max(0, rec.offMs || 0);
+		const pctDown = Math.max(0, 100 - pctUp);
+		rows.push({ idx: entry.idx, name: entry.name, downtimeMs, pctDown });
+	}
+
+	rows.sort((a, b) => b.downtimeMs - a.downtimeMs);
+	const startStr = formatLisbonDateTime(start);
+	const endStr = formatLisbonDateTime(now);
+	const summary = [
+		`<b>Downtime overview</b>`,
+		`Período: ${days} dia${days > 1 ? "s" : ""}`,
+		`De: ${escapeHtml(startStr)}`,
+		`Até: ${escapeHtml(endStr)}`
+	].join("\n");
+	const tableLines = formatDowntimeTableLines(rows);
+	const tableBlocks = tableLines.length ? chunkLinesIntoPreBlocks(tableLines, TELEGRAM_MAX - 200) : [];
+	return [summary, ...(tableBlocks.length ? tableBlocks : ["<i>Sem dados</i>"])];
+}
+
 function detectMenuShortcut(text) {
 	if (!text || typeof text !== "string") return null;
 	const cleaned = stripDiacritics(text).toLowerCase().replace(/[^\w\s/]/g, "").trim();
 	if (!cleaned || cleaned.startsWith("/")) return null;
 	if (cleaned.endsWith("status")) return "status";
 	if (cleaned.endsWith("historico")) return "history";
+	if (cleaned.includes("downtime") || cleaned.includes("offline")) return "downtime";
 	return null;
 }
 
@@ -1168,6 +1252,33 @@ function chunkLinesIntoPreBlocks(lines, maxLen) {
 	}
 	flush();
 	return blocks;
+}
+
+function formatDowntimeTableLines(rows) {
+	if (!rows.length) return [];
+	const idxLabel = "#";
+	const nameLabel = "Gateway";
+	const downLabel = "Downtime";
+	const pctLabel = "%Down";
+	const idxW = Math.max(idxLabel.length, ...rows.map((r) => String(r.idx || "").length));
+	const nameW = Math.max(nameLabel.length, ...rows.map((r) => (r.name || "").length));
+	const downW = Math.max(downLabel.length, ...rows.map((r) => fmtDur(r.downtimeMs).length));
+	const pctW = Math.max(pctLabel.length, ...rows.map((r) => formatPctValue(r.pctDown).length));
+	const header = `${padRight(idxLabel, idxW)} | ${padRight(nameLabel, nameW)} | ${padRight(downLabel, downW)} | ${padRight(pctLabel, pctW)}`;
+	const sep = `${"-".repeat(idxW)}-+-${"-".repeat(nameW)}-+-${"-".repeat(downW)}-+-${"-".repeat(pctW)}`;
+	const body = rows.map((r) => {
+		const idxStr = String(r.idx);
+		const nameStr = r.name || "-";
+		const downStr = fmtDur(r.downtimeMs);
+		const pctStr = formatPctValue(r.pctDown);
+		return `${padRight(idxStr, idxW)} | ${padRight(nameStr, nameW)} | ${padRight(downStr, downW)} | ${padRight(pctStr, pctW)}`;
+	});
+	return [header, sep, ...body];
+}
+
+function formatPctValue(v) {
+	if (!Number.isFinite(v)) return "-";
+	return `${v.toFixed(1)}%`;
 }
 
 // Legacy-safe normalizer: "OK"/"NOK", booleans, "1"/"0" -> 1/0

@@ -15,11 +15,12 @@ Fundão Bot is a Cloudflare Worker that bridges Telegram with the ResIOT API so 
 
 ## Telegram UX
 
-- `/start` or `/help` – installs the reply keyboard and explains the available actions.
+- `/start` or `/help` – installs the reply keyboard (Status, Histórico, Downtime) and explains the available actions.
 - `/status` `/status_ok` `/status_nok` – renders the current state of the gateways with name lookups from `GATEWAY_NAMES_JSON`.
 - `/history <index> [days]` – rebuilds the requested interval (default 7 days, max 90) and prints:
   - Summary (uptime %, total minutes online/offline, time range).
   - Transitions table with `Dia | Hora | Estado`.
+- `/downtime [days]` – prompts for the number of days (1–90) and returns a ranked table with the downtime per gateway for that period.
 - `/fetch <gwEUI> [days] [step]` – diagnostic command that logs granular slot data.
 - The inline allow/deny buttons in admin DMs update the `allowlist_fundao_bot.json` file.
 
