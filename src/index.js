@@ -7,6 +7,17 @@ const GH_API = "https://api.github.com";
 const ALLOWLIST_FILE = "allowlist_fundao_bot.json";
 
 let NAME_MAP_CACHE; // lazy JSON parse per isolate
+const MENU_KEYBOARD = {
+	keyboard: [
+		[
+			{ text: "📊 Status" },
+			{ text: "📈 Histórico" },
+		],
+	],
+	resize_keyboard: true,
+	one_time_keyboard: false,
+};
+const HISTORY_PROMPTS = new Map(); // chatId -> awaiting history params
 
 // ---- Uptime storage (Gist) ----
 // Snapshot "agora":
@@ -91,9 +102,12 @@ export default {
 				const allowed = await ensureAuthorized(update, env);
 				if (!allowed) return;
 
-				const blocks = await handleCommand(textIn, env, NAME_MAP_CACHE);
-				if (!blocks.length) return;
-				await pAll(blocks.map((b) => () => sendText(env, chatId, b)), 5);
+				const blocks = await handleCommand(chatId, textIn, env, NAME_MAP_CACHE);
+				const normalizedBlocks = (blocks || [])
+					.map((b) => (typeof b === "string" ? { text: b } : b))
+					.filter((b) => b && typeof b.text === "string");
+				if (!normalizedBlocks.length) return;
+				await pAll(normalizedBlocks.map((b) => () => sendText(env, chatId, b)), 5);
 			})();
 
 			ctx?.waitUntil?.(work);
@@ -278,22 +292,50 @@ async function handleAdminCallback(update, env) {
 
 // ---------- Commands ----------
 
-async function handleCommand(textIn, env, NAME_MAP) {
-	if (textIn === "/start" || textIn === "/help") {
-		return [[
-			"<b>Commands</b>",
-			"• <code>/status</code> — all gateways",
-			"• <code>/status_ok</code> — only ✅",
-			"• <code>/status_nok</code> — only ❌",
-			"• <code>/history &lt;#idx&gt; [dias]</code> — uptime/downtime histórico",
-			"  Ex: <code>/history 7</code> (7 dias) ou <code>/history 7 30</code> (30 dias)",
-			"• <code>/ping</code> — test"
-		].join("\n")];
-	}
-	if (textIn === "/ping") return ["<b>pong</b>"];
+async function handleCommand(chatId, textIn, env, NAME_MAP) {
+	const chatKey = chatId ? String(chatId) : "";
+	let commandText = (textIn || "").trim();
+	const awaitingHistory = chatKey && HISTORY_PROMPTS.has(chatKey);
 
-	if (textIn?.startsWith("/status")) {
-		const filter = textIn === "/status_ok" ? "OK" : textIn === "/status_nok" ? "NOK" : null;
+	const shortcut = detectMenuShortcut(commandText);
+	if (shortcut === "status") {
+		commandText = "/status";
+	} else if (shortcut === "history") {
+		if (chatKey) HISTORY_PROMPTS.set(chatKey, true);
+		return [{ text: historyPromptMessage(), reply_markup: MENU_KEYBOARD }];
+	}
+
+	if (awaitingHistory) {
+		if (!commandText) {
+			return [{ text: historyPromptMessage(), reply_markup: MENU_KEYBOARD }];
+		}
+		if (!commandText.startsWith("/")) {
+			return await handleHistoryInteractive(chatKey, commandText, env, NAME_MAP);
+		}
+		HISTORY_PROMPTS.delete(chatKey);
+	}
+
+	if (commandText === "/start" || commandText === "/help") {
+		HISTORY_PROMPTS.delete(chatKey);
+		return [{
+			text: [
+				"<b>Commands</b>",
+				"• <code>/status</code> — all gateways",
+				"• <code>/status_ok</code> — only ✅",
+				"• <code>/status_nok</code> — only ❌",
+				"• <code>/history &lt;#idx&gt; [dias]</code> — uptime/downtime histórico",
+				"  Ex: <code>/history 7</code> (7 dias) ou <code>/history 7 30</code> (30 dias)",
+				"• <code>/ping</code> — test",
+				"",
+				"Também podes tocar nos botões abaixo."
+			].join("\n"),
+			reply_markup: MENU_KEYBOARD,
+		}];
+	}
+	if (commandText === "/ping") return ["<b>pong</b>"];
+
+	if (commandText?.startsWith("/status")) {
+		const filter = commandText === "/status_ok" ? "OK" : commandText === "/status_nok" ? "NOK" : null;
 		const { ok, rows, err } = await fetchGatewaysDirect(env, NAME_MAP);
 		if (!ok) return [`<i>Failed /api/gateways</i>: ${escapeHtml(err || "error")}`];
 		const html = formatRowsAsTable(rows, filter);
@@ -301,8 +343,8 @@ async function handleCommand(textIn, env, NAME_MAP) {
 	}
 
 	// /fetch handler
-	if (textIn?.startsWith("/fetch")) {
-		const parts = textIn.split(/\s+/).filter(Boolean);
+	if (commandText?.startsWith("/fetch")) {
+		const parts = commandText.split(/\s+/).filter(Boolean);
 		const gwEUI = parts[1] || "";
 		let days = Math.max(1, Math.min(90, Number(parts[2] || 1)));
 		let stepMin = Number(parts[3] || (days <= 7 ? 5 : 60));
@@ -353,61 +395,102 @@ async function handleCommand(textIn, env, NAME_MAP) {
 	}
 
 	// /history <#idx> [dias]
-	if (textIn?.startsWith("/history")) {
-		const parts = textIn.split(/\s+/).filter(Boolean);
+	if (commandText?.startsWith("/history")) {
+		const parts = commandText.split(/\s+/).filter(Boolean);
 		const idx = Number(parts[1]);
-		const days = Math.max(1, Math.min(90, Number(parts[2] || 7)));
+		let days = Number(parts[2] || 7);
+		if (!Number.isFinite(days) || days <= 0) days = 7;
+		days = Math.max(1, Math.min(90, days));
 		if (!Number.isFinite(idx) || idx <= 0) {
-			return [
-				"Uso: <code>/history &lt;#idx&gt; [dias]</code> — vê <code>/status</code> para o índice do gateway.\nEx.: <code>/history 7</code> (7 dias) ou <code>/history 7 1</code> (1 dia)."
-			];
+			if (chatKey) HISTORY_PROMPTS.set(chatKey, true);
+			return [{ text: historyPromptMessage(), reply_markup: MENU_KEYBOARD }];
 		}
-
-		// Reconstrói o índice (ordenado por nome) com gwEUI
-		const list = await buildIndexList(env, NAME_MAP);
-		if (!list.ok) return [`<i>Falha a obter índice</i>: ${escapeHtml(list.err || "erro")}`];
-
-		const entry = list.items.find(r => r.idx === idx);
-		if (!entry) return ["<i>Índice não encontrado.</i> Corre <code>/status</code> e tenta de novo."];
-
-		const now = new Date();
-		const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-		const stepMin = (days <= 7 ? 5 : 60);
-
-		console.log('[history] args', { idx, name: entry.name, gwEUI: entry.gwEUI, days, stepMin, startIso: start.toISOString(), endIso: now.toISOString() });
-
-		const rec = await fetchSeriesForGateway(env, entry.gwEUI, start, now, stepMin);
-		if (!rec.ok) {
-			console.log('[history] error', rec.err || 'unknown');
-			return ['<i>Falha a obter série — vê os logs.</i>'];
-		}
-
-		const { slots, pctUp, eventsCount, offMs, transitions = [] } = rec;
-		const preview = slots.slice(0, 120);
-		console.log('[history] result', {
-			idx,
-			gwEUI: entry.gwEUI,
-			name: entry.name,
-			days,
-			stepMin,
-			startIso: start.toISOString(),
-			endIso: now.toISOString(),
-			eventsCount,
-			slotsLen: slots.length,
-			pctUp,
-			offMs,
-			transitionsCount: transitions.length,
-			slotsPreview: preview,
-		});
-		// Dump all 5-min states (grouped per hour) to logs
-		logSlotsHourLines('history', start, slots, stepMin);
-
-		// Format uptime report for user (may return multiple messages)
-		const messages = formatUptimeReport(entry, days, rec, start, now, transitions);
-		return messages;
+		return fulfillHistoryRequest(idx, days, env, NAME_MAP);
 	}
 
 	return ["<i>Say</i> <code>/status</code> <i>to view the table</i>."];
+}
+
+async function fulfillHistoryRequest(idx, days, env, NAME_MAP) {
+	// Reconstrói o índice (ordenado por nome) com gwEUI
+	const list = await buildIndexList(env, NAME_MAP);
+	if (!list.ok) return [`<i>Falha a obter índice</i>: ${escapeHtml(list.err || "erro")}`];
+
+	const entry = list.items.find(r => r.idx === idx);
+	if (!entry) return ["<i>Índice não encontrado.</i> Corre <code>/status</code> e tenta de novo."];
+
+	const now = new Date();
+	const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+	const stepMin = (days <= 7 ? 5 : 60);
+
+	console.log('[history] args', { idx, name: entry.name, gwEUI: entry.gwEUI, days, stepMin, startIso: start.toISOString(), endIso: now.toISOString() });
+
+	const rec = await fetchSeriesForGateway(env, entry.gwEUI, start, now, stepMin);
+	if (!rec.ok) {
+		console.log('[history] error', rec.err || 'unknown');
+		return ['<i>Falha a obter série — vê os logs.</i>'];
+	}
+
+	const { slots, pctUp, eventsCount, offMs, transitions = [] } = rec;
+	const preview = slots.slice(0, 120);
+	console.log('[history] result', {
+		idx,
+		gwEUI: entry.gwEUI,
+		name: entry.name,
+		days,
+		stepMin,
+		startIso: start.toISOString(),
+		endIso: now.toISOString(),
+		eventsCount,
+		slotsLen: slots.length,
+		pctUp,
+		offMs,
+		transitionsCount: transitions.length,
+		slotsPreview: preview,
+	});
+	logSlotsHourLines('history', start, slots, stepMin);
+
+	return formatUptimeReport(entry, days, rec, start, now, transitions);
+}
+
+async function handleHistoryInteractive(chatKey, rawInput, env, NAME_MAP) {
+	const parts = rawInput.split(/\s+/).filter(Boolean);
+	if (!parts.length) {
+		return [{ text: historyPromptMessage(), reply_markup: MENU_KEYBOARD }];
+	}
+	const idx = Number(parts[0]);
+	let days = Number(parts[1] || 7);
+	if (!Number.isFinite(idx) || idx <= 0) {
+		return [{
+			text: `<i>Número inválido.</i>\n\n${historyPromptMessage()}`,
+			reply_markup: MENU_KEYBOARD,
+		}];
+	}
+	if (!Number.isFinite(days) || days <= 0) days = 7;
+	days = Math.max(1, Math.min(90, days));
+	HISTORY_PROMPTS.delete(chatKey);
+	return fulfillHistoryRequest(idx, days, env, NAME_MAP);
+}
+
+function historyPromptMessage() {
+	return [
+		"<b>Histórico</b>",
+		"Indica: <code>&lt;#idx&gt; [dias]</code> — ex.: <code>7</code> (7 dias) ou <code>7 3</code> (3 dias).",
+		"Consulta <code>/status</code> para saber o número do gateway."
+	].join("\n");
+}
+
+function detectMenuShortcut(text) {
+	if (!text || typeof text !== "string") return null;
+	const cleaned = stripDiacritics(text).toLowerCase().replace(/[^\w\s/]/g, "").trim();
+	if (!cleaned || cleaned.startsWith("/")) return null;
+	if (cleaned.endsWith("status")) return "status";
+	if (cleaned.endsWith("historico")) return "history";
+	return null;
+}
+
+function stripDiacritics(str) {
+	return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
 // ---------- ResIOT ----------
@@ -1025,12 +1108,16 @@ function to01(v) {
 }
 // ---------- Telegram helpers ----------
 
-async function sendText(env, chatId, html) {
+async function sendText(env, chatId, payload) {
+	if (typeof payload === "string") payload = { text: payload };
+	const text = typeof payload?.text === "string" ? payload.text : "";
+	const replyMarkup = payload?.reply_markup;
 	return tgApi(env, "sendMessage", {
 		chat_id: chatId,
-		text: html,
+		text,
 		parse_mode: "HTML",
 		disable_web_page_preview: true,
+		...(replyMarkup ? { reply_markup: replyMarkup } : {}),
 	});
 }
 
