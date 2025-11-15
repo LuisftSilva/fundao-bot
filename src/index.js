@@ -326,7 +326,7 @@ async function handleCommand(chatId, textIn, env, NAME_MAP, ctx) {
 		if (pendingState.type === "downtime" && pendingState.stage === "await_days") {
 			const days = parseFirstPositiveNumber(commandText);
 			if (!days) {
-				return [{ text: downtimeInvalidDaysMessage(), reply_markup: MENU_KEYBOARD }];
+				return [{ text: downtimeInvalidDaysMessage(), reply_markup: forceReplyMarkup() }];
 			}
 			const clamped = clampDays(days);
 			HISTORY_PROMPTS.delete(chatKey);
@@ -454,7 +454,7 @@ function parseFirstPositiveNumber(input) {
 function handleHistoryIdxInput(chatKey, rawText) {
 	const idx = parseFirstPositiveNumber(rawText);
 	if (!idx) {
-		return [{ text: historyInvalidIdxMessage(), reply_markup: MENU_KEYBOARD }];
+		return [{ text: historyInvalidIdxMessage(), reply_markup: forceReplyMarkup() }];
 	}
 	HISTORY_PROMPTS.set(chatKey, { type: "history", stage: "await_days", idx });
 	return [historyAskDaysMessage(idx)];
@@ -463,7 +463,7 @@ function handleHistoryIdxInput(chatKey, rawText) {
 async function handleHistoryDaysInput(chatKey, rawText, idx, env, NAME_MAP) {
 	const days = parseFirstPositiveNumber(rawText);
 	if (!days) {
-		return [{ text: historyInvalidDaysMessage(), reply_markup: MENU_KEYBOARD }];
+		return [{ text: historyInvalidDaysMessage(), reply_markup: forceReplyMarkup() }];
 	}
 	const clamped = clampDays(days);
 	HISTORY_PROMPTS.delete(chatKey);
@@ -476,7 +476,7 @@ function historyAskIdxMessage() {
 			"<b>Histórico</b>",
 			"Indica o número do gateway (consulta <code>/status</code> para ver a lista)."
 		].join("\n"),
-		reply_markup: MENU_KEYBOARD,
+		reply_markup: forceReplyMarkup(),
 	};
 }
 
@@ -486,7 +486,7 @@ function historyAskDaysMessage(idx) {
 			`<b>Gateway #${idx}</b>`,
 			"Quantos dias queres analisar? (1-90)"
 		].join("\n"),
-		reply_markup: MENU_KEYBOARD,
+		reply_markup: forceReplyMarkup(),
 	};
 }
 
@@ -511,6 +511,10 @@ function welcomeKeyboardBlock() {
 	};
 }
 
+function forceReplyMarkup() {
+	return { force_reply: true, selective: false };
+}
+
 async function ensureBotCommands(env) {
 	if (BOT_COMMANDS_READY) return;
 	try {
@@ -528,7 +532,7 @@ function downtimeAskDaysMessage() {
 			"<b>Downtime</b>",
 			"Quantos dias queres analisar? (1-90)"
 		].join("\n"),
-		reply_markup: MENU_KEYBOARD,
+		reply_markup: forceReplyMarkup(),
 	};
 }
 
