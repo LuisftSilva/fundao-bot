@@ -515,6 +515,14 @@ function forceReplyMarkup() {
 	return { force_reply: true, selective: false };
 }
 
+function renderPreBlock(text) {
+	return `<pre>${escapeHtml(applyNoBreakSpaces(text))}</pre>`;
+}
+
+function applyNoBreakSpaces(str) {
+	return String(str || "").replace(/ /g, "\u00A0");
+}
+
 async function ensureBotCommands(env) {
 	if (BOT_COMMANDS_READY) return;
 	try {
@@ -924,7 +932,8 @@ function formatRowsAsTable(rows, filter /* "OK" | "NOK" | null */) {
 		.map((r) => `${padRight(String(r.idx || ""), idxW)}|${padRight(r.name || "", nameW)}|${padRight(r.when || "", whenW)}|${r.emoji || ""}`)
 		.join("\n");
 
-	return `<pre>${escapeHtml(`${header}\n${sep}\n${body}`)}</pre>`;
+	const table = `${header}\n${sep}\n${body}`;
+	return renderPreBlock(table);
 }
 
 // ---------- Gist helpers (NDJSON + carry + snapshot) ----------
@@ -1315,18 +1324,18 @@ function chunkLinesIntoPreBlocks(lines, maxLen) {
 	const flush = () => {
 		if (!buffer.length) return;
 		const text = buffer.join("\n");
-		blocks.push(`<pre>${escapeHtml(text)}</pre>`);
+		blocks.push(renderPreBlock(text));
 		buffer = [];
 	};
 
 	for (const line of lines) {
 		buffer.push(line);
-		let candidate = `<pre>${escapeHtml(buffer.join("\n"))}</pre>`;
+		let candidate = renderPreBlock(buffer.join("\n"));
 		if (candidate.length > maxLen) {
 			buffer.pop();
 			flush();
 			buffer = [line];
-			candidate = `<pre>${escapeHtml(buffer.join("\n"))}</pre>`;
+			candidate = renderPreBlock(buffer.join("\n"));
 			if (candidate.length > maxLen) {
 				blocks.push(candidate);
 				buffer = [];
