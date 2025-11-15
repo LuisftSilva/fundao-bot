@@ -33,8 +33,7 @@ export default {
 	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
 
-		// ---- DEBUG: validar acesso ao Gist com as env atuais ----
-		if (url.pathname === "/debug/gist") {
+			if (url.pathname === "/debug/gist") {
 			try {
 				const id = env.GITHUB_GIST_ID || "(missing)";
 				const hasTok = !!env.GITHUB_TOKEN;
@@ -64,14 +63,12 @@ export default {
 			}
 		}
 
-		try {
-			// health & path guards
-			if (url.pathname === "/health") return new Response("ok");
+			try {
+				if (url.pathname === "/health") return new Response("ok");
 			if (!url.pathname.startsWith("/webhook")) {
 				return new Response("not found", { status: 404 });
 			}
 
-			// optional secret in path: /webhook/<secret>
 			if (env.TELEGRAM_WEBHOOK_SECRET) {
 				const seg = url.pathname.split("/").filter(Boolean)[1];
 				if (seg !== env.TELEGRAM_WEBHOOK_SECRET) {
@@ -90,13 +87,11 @@ export default {
 			const chatId = msg?.chat?.id;
 			const textIn = (update.message?.text || "").trim();
 
-			// admin callbacks (approve/deny)
 			if (update.callback_query?.data) {
 				ctx?.waitUntil?.(handleAdminCallback(update, env));
 				return new Response("OK");
 			}
 
-			// auth + commands (always 200 to Telegram)
 			const work = (async () => {
 				if (!chatId) return;
 				const allowed = await ensureAuthorized(update, env);
@@ -218,10 +213,8 @@ async function ensureAuthorized(update, env) {
 	const chatId = msg?.chat?.id;
 	if (!chatId) return false;
 
-	// admin always allowed
 	if (String(chatId) === ADMIN_ID) return true;
 
-	// allowed via gist?
 	try {
 		if (await isChatAllowed(env, chatId)) return true;
 	} catch (e) {
@@ -229,14 +222,11 @@ async function ensureAuthorized(update, env) {
 		return false;
 	}
 
-	// only trigger request on /start
 	const textIn = (update.message?.text || "").trim();
 	if (textIn !== "/start") return false;
 
-	// notify user
 	await sendText(env, chatId, "<i>Request sent to admin. Please wait for approval.</i>");
 
-	// ask admin with inline buttons
 	const u = update.message?.from || {};
 	const ch = update.message?.chat || {};
 	await tgApi(env, "sendMessage", {
@@ -331,7 +321,6 @@ async function handleCommand(chatId, textIn, env, NAME_MAP) {
 		return splitIntoChunks(html, TELEGRAM_MAX - 600);
 	}
 
-	// /fetch handler
 	if (commandText?.startsWith("/fetch")) {
 		const parts = commandText.split(/\s+/).filter(Boolean);
 		const gwEUI = parts[1] || "";
@@ -383,7 +372,6 @@ async function handleCommand(chatId, textIn, env, NAME_MAP) {
 		return [msg];
 	}
 
-	// /history <#idx> [dias]
 	if (commandText?.startsWith("/history")) {
 		const parts = commandText.split(/\s+/).filter(Boolean);
 		const idx = Number(parts[1]);
