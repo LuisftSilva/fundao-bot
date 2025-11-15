@@ -402,9 +402,9 @@ async function handleCommand(textIn, env, NAME_MAP) {
 		// Dump all 5-min states (grouped per hour) to logs
 		logSlotsHourLines('history', start, slots, stepMin);
 
-		// Format uptime report for user
-		const msg = formatUptimeReport(entry, days, rec, start, now, transitions);
-		return [msg];
+		// Format uptime report for user (may return multiple messages)
+		const messages = formatUptimeReport(entry, days, rec, start, now, transitions);
+		return messages;
 	}
 
 	return ["<i>Say</i> <code>/status</code> <i>to view the table</i>."];
@@ -947,7 +947,7 @@ function fmtDur(ms) {
 	return `${s}s`;
 }
 
-// Format uptime report for Telegram
+// Format uptime report for Telegram (returns array of messages if needed)
 function formatUptimeReport(entry, days, rec, start, end, transitions = []) {
 	const { pctUp, offMs } = rec;
 	const totalMs = end - start;
@@ -961,7 +961,7 @@ function formatUptimeReport(entry, days, rec, start, end, transitions = []) {
 	const startStr = formatLisbonDateTime(start);
 	const endStr = formatLisbonDateTime(end);
 
-	const lines = [
+	const headerLines = [
 		`<b>${escapeHtml(entry.name)}</b>`,
 		`EUI: <code>${escapeHtml(entry.gwEUI)}</code>`,
 		`Código: <code>${escapeHtml(entry.code || '-')}</code>`,
@@ -977,19 +977,45 @@ function formatUptimeReport(entry, days, rec, start, end, transitions = []) {
 		`Tempo offline: ${durDown}`,
 	];
 
-	// Show all transitions in the period (most recent first)
+	const messages = [];
+	const MAX_LENGTH = 3800; // Safe margin below Telegram's 4096 limit
+
+	// First message with header
+	let currentMsg = headerLines.join('\n');
+
+	// Add transitions if any
 	if (transitions.length > 0) {
-		lines.push(``);
-		lines.push(`<b>Transições (${transitions.length}):</b>`);
+		const transHeader = `\n\n<b>Transições (${transitions.length}):</b>`;
 		const sorted = transitions.slice().reverse(); // most recent first
+
+		// Try to add header
+		if ((currentMsg + transHeader).length < MAX_LENGTH) {
+			currentMsg += transHeader;
+		} else {
+			// Header itself exceeds, push current and start new
+			messages.push(currentMsg);
+			currentMsg = transHeader;
+		}
+
 		for (const tr of sorted) {
 			const emoji = tr.s === 1 ? '✅' : '❌';
 			const status = tr.s === 1 ? 'Online' : 'Offline';
-			lines.push(`${emoji} ${escapeHtml(tr.t)} — ${status}`);
+			const line = `\n${emoji} ${escapeHtml(tr.t)} — ${status}`;
+
+			if ((currentMsg + line).length > MAX_LENGTH) {
+				// Push current message and start new one
+				messages.push(currentMsg);
+				currentMsg = `<b>Transições (continuação):</b>${line}`;
+			} else {
+				currentMsg += line;
+			}
 		}
 	}
 
-	return lines.join('\n');
+	// Push last message
+	messages.push(currentMsg);
+
+	return messages;
 }
 
 // Legacy-safe normalizer: "OK"/"NOK", booleans, "1"/"0" -> 1/0
