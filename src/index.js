@@ -1310,9 +1310,9 @@ function buildTransitionTableLines(transitions) {
 	const timeW = Math.max(timeLabel.length, ...rows.map((r) => (r.time || "").length));
 	const stateW = Math.max(stateLabel.length, ...rows.map((r) => (r.state || "").length));
 
-	const header = `${padRight(dayLabel, dayW)} | ${padRight(timeLabel, timeW)} | ${padRight(stateLabel, stateW)}`;
-	const sep = `${"-".repeat(dayW)}-+-${"-".repeat(timeW)}-+-${"-".repeat(stateW)}`;
-	const body = rows.map((r) => `${padRight(r.day, dayW)} | ${padRight(r.time, timeW)} | ${padRight(r.state, stateW)}`);
+	const header = `${padRight(dayLabel, dayW)}|${padRight(timeLabel, timeW)}|${padRight(stateLabel, stateW)}`;
+	const sep = `${"-".repeat(dayW)}+${"-".repeat(timeW)}+${"-".repeat(stateW)}`;
+	const body = rows.map((r) => `${padRight(r.day, dayW)}|${padRight(r.time, timeW)}|${padRight(r.state, stateW)}`);
 	return [header, sep, ...body];
 }
 
@@ -1370,10 +1370,10 @@ function formatDowntimeTableLines(rows) {
 	const nameW = Math.max(nameLabel.length, ...mapped.map((r) => r.name.length));
 	const downW = Math.max(downLabel.length, ...rows.map((r) => fmtDur(r.downtimeMs).length));
 	const pctW = Math.max(pctLabel.length, ...rows.map((r) => formatPctValue(r.pctDown).length));
-	const header = `${padRight(idxLabel, idxW)} | ${padRight(nameLabel, nameW)} | ${padRight(downLabel, downW)} | ${padRight(pctLabel, pctW)}`;
-	const sep = `${"-".repeat(idxW)}-+-${"-".repeat(nameW)}-+-${"-".repeat(downW)}-+-${"-".repeat(pctW)}`;
+	const header = `${padRight(idxLabel, idxW)}|${padRight(nameLabel, nameW)}|${padRight(downLabel, downW)}|${padRight(pctLabel, pctW)}`;
+	const sep = `${"-".repeat(idxW)}+${"-".repeat(nameW)}+${"-".repeat(downW)}+${"-".repeat(pctW)}`;
 	const body = mapped.map((r) => {
-		return `${padRight(r.idx, idxW)} | ${padRight(r.name, nameW)} | ${padRight(r.downStr, downW)} | ${padRight(r.pctStr, pctW)}`;
+		return `${padRight(r.idx, idxW)}|${padRight(r.name, nameW)}|${padRight(r.downStr, downW)}|${padRight(r.pctStr, pctW)}`;
 	});
 	return [header, sep, ...body];
 }
