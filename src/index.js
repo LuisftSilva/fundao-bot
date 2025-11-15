@@ -977,18 +977,15 @@ function formatUptimeReport(entry, days, rec, start, end, transitions = []) {
 		`Tempo offline: ${durDown}`,
 	];
 
-	// Show recent transitions (max 10 most recent)
+	// Show all transitions in the period (most recent first)
 	if (transitions.length > 0) {
 		lines.push(``);
-		lines.push(`<b>Transições recentes:</b>`);
-		const recent = transitions.slice(-10).reverse(); // last 10, most recent first
-		for (const tr of recent) {
+		lines.push(`<b>Transições (${transitions.length}):</b>`);
+		const sorted = transitions.slice().reverse(); // most recent first
+		for (const tr of sorted) {
 			const emoji = tr.s === 1 ? '✅' : '❌';
 			const status = tr.s === 1 ? 'Online' : 'Offline';
 			lines.push(`${emoji} ${escapeHtml(tr.t)} — ${status}`);
-		}
-		if (transitions.length > 10) {
-			lines.push(`<i>(+ ${transitions.length - 10} transições anteriores)</i>`);
 		}
 	}
 
