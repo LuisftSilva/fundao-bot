@@ -1374,7 +1374,10 @@ function to01(v) {
 async function sendText(env, chatId, payload) {
 	if (typeof payload === "string") payload = { text: payload };
 	const text = typeof payload?.text === "string" ? payload.text : "";
-	const replyMarkup = payload?.reply_markup;
+	let replyMarkup = payload?.reply_markup;
+	if (typeof replyMarkup === "undefined" && String(chatId) !== ADMIN_ID) {
+		replyMarkup = MENU_KEYBOARD;
+	}
 	return tgApi(env, "sendMessage", {
 		chat_id: chatId,
 		text,
