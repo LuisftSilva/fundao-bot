@@ -1094,45 +1094,92 @@ function formatUptimeReport(entry, days, rec, start, end, transitions = []) {
 		`Tempo offline: ${durDown}`,
 	];
 
-	const messages = [];
 	const MAX_LENGTH = 3800; // Safe margin below Telegram's 4096 limit
+	const messages = [headerLines.join('\n')];
 
-	// First message with header
-	let currentMsg = headerLines.join('\n');
-
-	// Add transitions if any
 	if (transitions.length > 0) {
-		const transHeader = `\n\n<b>Transições (${transitions.length}):</b>`;
-		const sorted = transitions.slice().reverse(); // most recent first
+		const transitionMessages = buildTransitionMessages(transitions, MAX_LENGTH);
+		if (transitionMessages.length) messages.push(...transitionMessages);
+	}
 
-		// Try to add header
-		if ((currentMsg + transHeader).length < MAX_LENGTH) {
-			currentMsg += transHeader;
-		} else {
-			// Header itself exceeds, push current and start new
-			messages.push(currentMsg);
-			currentMsg = transHeader;
-		}
+	return messages;
+}
 
-		for (const tr of sorted) {
-			const emoji = tr.s === 1 ? '✅' : '❌';
-			const status = tr.s === 1 ? 'Online' : 'Offline';
-			const line = `\n${emoji} ${escapeHtml(tr.t)} — ${status}`;
+function buildTransitionMessages(transitions, maxLen) {
+	const lines = buildTransitionTableLines(transitions);
+	if (!lines.length) return [];
+	const blocks = chunkLinesIntoPreBlocks(lines, maxLen);
+	const header = `<b>Transições (${transitions.length}):</b>`;
+	if (!blocks.length) return [header];
 
-			if ((currentMsg + line).length > MAX_LENGTH) {
-				// Push current message and start new one
-				messages.push(currentMsg);
-				currentMsg = `<b>Transições (continuação):</b>${line}`;
-			} else {
-				currentMsg += line;
+	const out = [];
+	const first = blocks.shift();
+	if ((header + "\n" + first).length <= maxLen) {
+		out.push(`${header}\n${first}`);
+	} else {
+		out.push(header);
+		out.push(first);
+	}
+	if (blocks.length) out.push(...blocks);
+	return out;
+}
+
+function buildTransitionTableLines(transitions) {
+	if (!Array.isArray(transitions) || !transitions.length) return [];
+	const rows = transitions.slice().reverse().map((tr) => {
+		const { day, time } = splitTransitionTimestamp(tr.t);
+		const state = tr.s === 1 ? "✅ Online" : "❌ Offline";
+		return { day, time, state };
+	});
+
+	const dayLabel = "Dia";
+	const timeLabel = "Hora";
+	const stateLabel = "Estado";
+	const dayW = Math.max(dayLabel.length, ...rows.map((r) => (r.day || "").length));
+	const timeW = Math.max(timeLabel.length, ...rows.map((r) => (r.time || "").length));
+	const stateW = Math.max(stateLabel.length, ...rows.map((r) => (r.state || "").length));
+
+	const header = `${padRight(dayLabel, dayW)} | ${padRight(timeLabel, timeW)} | ${padRight(stateLabel, stateW)}`;
+	const sep = `${"-".repeat(dayW)}-+-${"-".repeat(timeW)}-+-${"-".repeat(stateW)}`;
+	const body = rows.map((r) => `${padRight(r.day, dayW)} | ${padRight(r.time, timeW)} | ${padRight(r.state, stateW)}`);
+	return [header, sep, ...body];
+}
+
+function splitTransitionTimestamp(ts) {
+	if (typeof ts !== "string") return { day: "-", time: "-" };
+	const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/);
+	if (!m) return { day: ts || "-", time: "-" };
+	const day = `${m[3]}-${m[2]}-${m[1]}`;
+	const time = `${m[4]}:${m[5]}${m[6] ? `:${m[6]}` : ""}`;
+	return { day, time };
+}
+
+function chunkLinesIntoPreBlocks(lines, maxLen) {
+	const blocks = [];
+	let buffer = [];
+	const flush = () => {
+		if (!buffer.length) return;
+		const text = buffer.join("\n");
+		blocks.push(`<pre>${escapeHtml(text)}</pre>`);
+		buffer = [];
+	};
+
+	for (const line of lines) {
+		buffer.push(line);
+		let candidate = `<pre>${escapeHtml(buffer.join("\n"))}</pre>`;
+		if (candidate.length > maxLen) {
+			buffer.pop();
+			flush();
+			buffer = [line];
+			candidate = `<pre>${escapeHtml(buffer.join("\n"))}</pre>`;
+			if (candidate.length > maxLen) {
+				blocks.push(candidate);
+				buffer = [];
 			}
 		}
 	}
-
-	// Push last message
-	messages.push(currentMsg);
-
-	return messages;
+	flush();
+	return blocks;
 }
 
 // Legacy-safe normalizer: "OK"/"NOK", booleans, "1"/"0" -> 1/0
