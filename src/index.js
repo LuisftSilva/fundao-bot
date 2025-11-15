@@ -559,8 +559,9 @@ async function buildDowntimeReport(days, env, NAME_MAP) {
 	const stepMin = (days <= 7 ? 5 : 60);
 
 	const rows = [];
+	const gistCache = { carries: new Map(), transitions: new Map() };
 	for (const entry of list.items) {
-		const rec = await fetchSeriesForGateway(env, entry.gwEUI, start, now, stepMin);
+		const rec = await fetchSeriesForGateway(env, entry.gwEUI, start, now, stepMin, gistCache);
 		if (!rec.ok) {
 			console.error('[downtime] error', { gwEUI: entry.gwEUI, err: rec.err });
 			return [`<i>Falha a calcular downtime</i>: ${escapeHtml(rec.err || "erro")} (${escapeHtml(entry.name)})`];
@@ -1005,7 +1006,7 @@ function enumerateMonths(start, end) {
 	return out;
 }
 
-async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5) {
+async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCache) {
 
 	// Parse "YYYY-MM-DDTHH:mm:ss" como hora de Lisboa (sem timezone)
 	function parseLisbonWall(ts) {
@@ -1027,27 +1028,51 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5) {
 		const events = [];
 		const touched = [];
 
-		for (const mm of months) {
-			const key = `${mm.y}-${String(mm.m).padStart(2, '0')}`;
-			const carryName = `${CARRY_PREFIX}${key}.json`;
-			const transName = `${MONTH_PREFIX}${key}.ndjson`;
+		const carryCache = gistCache?.carries;
+		const transCache = gistCache?.transitions;
 
-			const carry = await gistReadJsonSafe(env, carryName);
-			if (carry && carry.state && Object.prototype.hasOwnProperty.call(carry.state, gwEUI)) {
-				if (initState === undefined) initState = to01(carry.state[gwEUI]);
-			}
+		const readCarry = async (filename) => {
+			if (carryCache?.has(filename)) return carryCache.get(filename);
+			const data = await gistReadJsonSafe(env, filename);
+			if (carryCache) carryCache.set(filename, data);
+			return data;
+		};
 
-			const text = await gistReadFileText(env, transName);
+		const readTransitions = async (filename) => {
+			if (transCache?.has(filename)) return transCache.get(filename);
+			const text = await gistReadFileText(env, filename);
+			const entry = { byGw: new Map(), hadContent: !!text };
 			if (text) {
-				touched.push(transName);
 				const lines = text.split(/\n+/);
 				for (const line of lines) {
 					if (!line) continue;
 					try {
 						const obj = JSON.parse(line);
-						if (obj.gw === gwEUI) events.push(obj); // {t,gw,s}
-					} catch { }
+						if (!obj?.gw) continue;
+						if (!entry.byGw.has(obj.gw)) entry.byGw.set(obj.gw, []);
+						entry.byGw.get(obj.gw).push(obj);
+					} catch {}
 				}
+			}
+			if (transCache) transCache.set(filename, entry);
+			return entry;
+		};
+
+		for (const mm of months) {
+			const key = `${mm.y}-${String(mm.m).padStart(2, '0')}`;
+			const carryName = `${CARRY_PREFIX}${key}.json`;
+			const transName = `${MONTH_PREFIX}${key}.ndjson`;
+
+			const carry = await readCarry(carryName);
+			if (carry && carry.state && Object.prototype.hasOwnProperty.call(carry.state, gwEUI)) {
+				if (initState === undefined) initState = to01(carry.state[gwEUI]);
+			}
+
+			const transEntry = await readTransitions(transName);
+			if (transEntry?.hadContent) touched.push(transName);
+			if (transEntry) {
+				const gwEvents = transEntry.byGw.get(gwEUI) || [];
+				for (const obj of gwEvents) events.push(obj);
 			}
 		}
 		if (initState === undefined) initState = 0;
