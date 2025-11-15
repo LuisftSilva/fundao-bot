@@ -572,7 +572,7 @@ async function buildDowntimeReport(days, env, NAME_MAP) {
 		rows.push({ idx: entry.idx, name: entry.name, downtimeMs, pctDown });
 	}
 
-	rows.sort((a, b) => b.downtimeMs - a.downtimeMs);
+	rows.sort((a, b) => a.idx - b.idx);
 	const startStr = formatLisbonDateTime(start);
 	const endStr = formatLisbonDateTime(now);
 	const summary = [
