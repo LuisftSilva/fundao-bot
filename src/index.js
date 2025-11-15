@@ -273,7 +273,10 @@ async function handleAdminCallback(update, env) {
 			list.push(targetChatId);
 			await saveAllowlist(env, list);
 		}
-		await sendText(env, targetChatId, "✅ Authorized. You can use /status.");
+		await sendText(env, targetChatId, {
+			text: "✅ Authorized. Tap a button below to begin.",
+			reply_markup: MENU_KEYBOARD,
+		});
 		if (messageChatId) await sendText(env, messageChatId, `✅ Added ${targetChatId}`);
 	} else {
 		await sendText(env, targetChatId, "❌ Not authorized.");
@@ -318,7 +321,7 @@ async function handleCommand(chatId, textIn, env, NAME_MAP) {
 
 	if (commandText === "/start" || commandText === "/help") {
 		HISTORY_PROMPTS.delete(chatKey);
-		return [{ text: "\u200b", reply_markup: MENU_KEYBOARD }];
+		return [welcomeKeyboardBlock()];
 	}
 	if (commandText === "/ping") return ["<b>pong</b>"];
 
@@ -479,6 +482,13 @@ function historyInvalidDaysMessage() {
 		"<i>Dias inválidos.</i>",
 		"Indica apenas o número de dias (1-90)."
 	].join("\n");
+}
+
+function welcomeKeyboardBlock() {
+	return {
+		text: "\u200b",
+		reply_markup: MENU_KEYBOARD,
+	};
 }
 
 async function handleDowntimeDaysInput(chatKey, rawText, env, NAME_MAP) {
