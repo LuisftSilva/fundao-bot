@@ -921,8 +921,8 @@ function formatRowsAsTable(rows, filter /* "OK" | "NOK" | null */) {
 	if (!filtered.length) return "<i>(sem dados)</i>";
 
 	const HI = "Nº", HN = "Nome", HW = "Quando", HS = "Ok";
-	const NAME_MAX = 18;
-	const WHEN_MAX = 14;
+	const NAME_MAX = 16;
+	const WHEN_MAX = 12;
 	const mapped = filtered.map((r) => ({
 		idx: String(r.idx || ""),
 		name: truncateCell(r.name || "", NAME_MAX),
