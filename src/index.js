@@ -49,7 +49,7 @@ export default {
 	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
 
-			if (url.pathname === "/debug/gist") {
+		if (url.pathname === "/debug/gist") {
 			try {
 				const id = env.GITHUB_GIST_ID || "(missing)";
 				const hasTok = !!env.GITHUB_TOKEN;
@@ -79,8 +79,8 @@ export default {
 			}
 		}
 
-			try {
-				if (url.pathname === "/health") return new Response("ok");
+		try {
+			if (url.pathname === "/health") return new Response("ok");
 			if (!url.pathname.startsWith("/webhook")) {
 				return new Response("not found", { status: 404 });
 			}
@@ -248,15 +248,7 @@ async function ensureAuthorized(update, env) {
 	const rawText = (update.message?.text || "").trim();
 	const normalizedText = normalizeStartCommand(rawText);
 	const isStartIntent = normalizedText === "/start";
-	if (!isStartIntent) {
-		if (rawText) {
-			await sendText(env, chatId, {
-				text: 'Toca em "Pedir acesso" para solicitar permissão.',
-				reply_markup: REQUEST_ACCESS_KEYBOARD,
-			});
-		}
-		return false;
-	}
+	if (!isStartIntent) return false;
 
 	await sendText(env, chatId, "<i>Request sent to admin. Please wait for approval.</i>");
 
