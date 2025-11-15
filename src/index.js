@@ -5,8 +5,18 @@ const TELEGRAM_MAX = 4096;
 const ADMIN_ID = "992579547";
 const GH_API = "https://api.github.com";
 const ALLOWLIST_FILE = "allowlist_fundao_bot.json";
+const BOT_COMMANDS = [
+	{ command: "start", description: "Mostrar o menu" },
+	{ command: "status", description: "Estado de todos os gateways" },
+	{ command: "status_ok", description: "Apenas gateways online" },
+	{ command: "status_nok", description: "Apenas gateways offline" },
+	{ command: "history", description: "Histórico de um gateway" },
+	{ command: "downtime", description: "Downtime agregado" },
+	{ command: "ping", description: "Teste rápido" },
+];
 
 let NAME_MAP_CACHE; // lazy JSON parse per isolate
+let BOT_COMMANDS_READY = false;
 const MENU_KEYBOARD = {
 	keyboard: [
 		[
@@ -98,7 +108,7 @@ export default {
 				const allowed = await ensureAuthorized(update, env);
 				if (!allowed) return;
 
-				const blocks = await handleCommand(chatId, textIn, env, NAME_MAP_CACHE);
+					const blocks = await handleCommand(chatId, textIn, env, NAME_MAP_CACHE, ctx);
 				const normalizedBlocks = (blocks || [])
 					.map((b) => (typeof b === "string" ? { text: b } : b))
 					.filter((b) => b && typeof b.text === "string");
@@ -273,6 +283,7 @@ async function handleAdminCallback(update, env) {
 			list.push(targetChatId);
 			await saveAllowlist(env, list);
 		}
+		await ensureBotCommands(env).catch((e) => console.error("[setMyCommands]", e));
 		await sendText(env, targetChatId, {
 			text: "✅ Authorized. Tap a button below to begin.",
 			reply_markup: MENU_KEYBOARD,
@@ -286,7 +297,7 @@ async function handleAdminCallback(update, env) {
 
 // ---------- Commands ----------
 
-async function handleCommand(chatId, textIn, env, NAME_MAP) {
+async function handleCommand(chatId, textIn, env, NAME_MAP, ctx) {
 	const chatKey = chatId ? String(chatId) : "";
 	let commandText = (textIn || "").trim();
 	const pendingState = chatKey ? HISTORY_PROMPTS.get(chatKey) : null;
@@ -313,7 +324,14 @@ async function handleCommand(chatId, textIn, env, NAME_MAP) {
 			}
 		}
 		if (pendingState.type === "downtime" && pendingState.stage === "await_days") {
-			return await handleDowntimeDaysInput(chatKey, commandText, env, NAME_MAP);
+			const days = parseFirstPositiveNumber(commandText);
+			if (!days) {
+				return [{ text: downtimeInvalidDaysMessage(), reply_markup: MENU_KEYBOARD }];
+			}
+			const clamped = clampDays(days);
+			HISTORY_PROMPTS.delete(chatKey);
+			queueDowntimeReport(chatId, clamped, env, NAME_MAP, ctx);
+			return [downtimeProcessingMessage(clamped)];
 		}
 	} else if (pendingState && commandText.startsWith("/")) {
 		HISTORY_PROMPTS.delete(chatKey);
@@ -321,6 +339,7 @@ async function handleCommand(chatId, textIn, env, NAME_MAP) {
 
 	if (commandText === "/start" || commandText === "/help") {
 		HISTORY_PROMPTS.delete(chatKey);
+		await ensureBotCommands(env).catch((e) => console.error("[setMyCommands]", e));
 		return [welcomeKeyboardBlock()];
 	}
 	if (commandText === "/ping") return ["<b>pong</b>"];
@@ -410,7 +429,8 @@ async function handleCommand(chatId, textIn, env, NAME_MAP) {
 		}
 		HISTORY_PROMPTS.delete(chatKey);
 		days = clampDays(days);
-		return buildDowntimeReport(days, env, NAME_MAP);
+		queueDowntimeReport(chatId, days, env, NAME_MAP, ctx);
+		return [downtimeProcessingMessage(days)];
 	}
 
 	return ["<i>Say</i> <code>/status</code> <i>to view the table</i>."];
@@ -491,14 +511,15 @@ function welcomeKeyboardBlock() {
 	};
 }
 
-async function handleDowntimeDaysInput(chatKey, rawText, env, NAME_MAP) {
-	const days = parseFirstPositiveNumber(rawText);
-	if (!days) {
-		return [{ text: downtimeInvalidDaysMessage(), reply_markup: MENU_KEYBOARD }];
+async function ensureBotCommands(env) {
+	if (BOT_COMMANDS_READY) return;
+	try {
+		await tgApi(env, "setMyCommands", { commands: BOT_COMMANDS });
+		BOT_COMMANDS_READY = true;
+	} catch (e) {
+		BOT_COMMANDS_READY = false;
+		throw e;
 	}
-	const clamped = clampDays(days);
-	HISTORY_PROMPTS.delete(chatKey);
-	return buildDowntimeReport(clamped, env, NAME_MAP);
 }
 
 function downtimeAskDaysMessage() {
@@ -516,6 +537,29 @@ function downtimeInvalidDaysMessage() {
 		"<i>Dias inválidos.</i>",
 		"Indica apenas o número de dias (1-90)."
 	].join("\n");
+}
+
+function downtimeProcessingMessage(days) {
+	return `<i>A calcular downtime para ${days} dia${days > 1 ? "s" : ""} — aguarda...</i>`;
+}
+
+function queueDowntimeReport(chatId, days, env, NAME_MAP, ctx) {
+	const job = (async () => {
+		try {
+			const blocks = await buildDowntimeReport(days, env, NAME_MAP);
+			if (!blocks.length) return;
+			const payloads = blocks.map((b) => (typeof b === "string" ? { text: b } : b));
+			await pAll(payloads.map((p) => () => sendText(env, chatId, p)), 3);
+		} catch (e) {
+			const msg = `<i>Erro ao calcular downtime</i>: ${escapeHtml(e?.message || String(e))}`;
+			await sendText(env, chatId, msg);
+		}
+	})();
+	if (ctx?.waitUntil) {
+		ctx.waitUntil(job);
+	} else {
+		job.catch((err) => console.error("[downtime queue]", err));
+	}
 }
 
 async function fulfillHistoryRequest(idx, days, env, NAME_MAP) {
