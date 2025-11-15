@@ -28,6 +28,11 @@ const MENU_KEYBOARD = {
 	resize_keyboard: true,
 	one_time_keyboard: false,
 };
+const REQUEST_ACCESS_KEYBOARD = {
+	keyboard: [[{ text: "Pedir acesso" }]],
+	resize_keyboard: true,
+	one_time_keyboard: true,
+};
 const HISTORY_PROMPTS = new Map(); // chatId -> { type: "history"|"downtime", stage: string, idx?: number }
 
 // ---- Uptime storage (Gist) ----
@@ -96,7 +101,8 @@ export default {
 			const update = await safeJson(request) || {};
 			const msg = update.message ?? update.callback_query?.message;
 			const chatId = msg?.chat?.id;
-			const textIn = (update.message?.text || "").trim();
+			const rawTextIn = (update.message?.text || "").trim();
+			const textIn = normalizeStartCommand(rawTextIn);
 
 			if (update.callback_query?.data) {
 				ctx?.waitUntil?.(handleAdminCallback(update, env));
@@ -233,8 +239,18 @@ async function ensureAuthorized(update, env) {
 		return false;
 	}
 
-	const textIn = (update.message?.text || "").trim();
-	if (textIn !== "/start") return false;
+	const rawText = (update.message?.text || "").trim();
+	const normalizedText = normalizeStartCommand(rawText);
+	const isStartIntent = normalizedText === "/start";
+	if (!isStartIntent) {
+		if (rawText) {
+			await sendText(env, chatId, {
+				text: 'Toca em "Pedir acesso" para solicitar permissão.',
+				reply_markup: REQUEST_ACCESS_KEYBOARD,
+			});
+		}
+		return false;
+	}
 
 	await sendText(env, chatId, "<i>Request sent to admin. Please wait for approval.</i>");
 
@@ -1388,6 +1404,18 @@ function truncateCell(str, maxLen) {
 	if (str.length <= maxLen) return str;
 	if (maxLen <= 1) return str.slice(0, maxLen);
 	return str.slice(0, maxLen - 1) + "…";
+}
+
+function normalizeStartCommand(text) {
+	const trimmed = String(text || "").trim();
+	if (!trimmed) return "";
+	if (isAccessRequestText(trimmed)) return "/start";
+	return trimmed;
+}
+
+function isAccessRequestText(text) {
+	const base = stripDiacritics(String(text || "")).toLowerCase();
+	return base === "pedir acesso";
 }
 
 // Legacy-safe normalizer: "OK"/"NOK", booleans, "1"/"0" -> 1/0
