@@ -109,6 +109,12 @@ export default {
 				return new Response("OK");
 			}
 
+			// Handle bot being added to a new chat
+			if (update.my_chat_member) {
+				ctx?.waitUntil?.(handleMyChatMember(update.my_chat_member, env));
+				return new Response("OK");
+			}
+
 			const work = (async () => {
 				if (!chatId) return;
 				const allowed = await ensureAuthorized(update, env);
@@ -278,6 +284,44 @@ async function ensureAuthorized(update, env) {
 	}).catch(e => console.error("notify admin err:", e));
 
 	return false;
+}
+
+async function handleMyChatMember(chatMember, env) {
+	try {
+		const chatId = chatMember?.chat?.id;
+		if (!chatId) return;
+
+		// Check if admin
+		if (String(chatId) === ADMIN_ID) return;
+
+		const newStatus = chatMember?.new_chat_member?.status;
+		const oldStatus = chatMember?.old_chat_member?.status;
+
+		// Bot was added to chat (member or administrator)
+		const wasAdded = (oldStatus === "left" || oldStatus === "kicked") &&
+			(newStatus === "member" || newStatus === "administrator");
+
+		if (!wasAdded) return;
+
+		// Check if already authorized
+		const allowed = await isChatAllowed(env, chatId).catch(() => false);
+		if (allowed) {
+			// Already authorized, show menu
+			await ensureBotCommands(env).catch((e) => console.error("[setMyCommands]", e));
+			await sendText(env, chatId, {
+				text: "✅ Olá! Estou pronto para ajudar.",
+				reply_markup: MENU_KEYBOARD,
+			});
+		} else {
+			// Not authorized, show request access button
+			await sendText(env, chatId, {
+				text: 'Toca em "Pedir acesso" para solicitar permissão.',
+				reply_markup: REQUEST_ACCESS_KEYBOARD,
+			});
+		}
+	} catch (e) {
+		console.error("[handleMyChatMember] error:", e);
+	}
 }
 
 async function handleAdminCallback(update, env) {
