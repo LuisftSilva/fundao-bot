@@ -464,6 +464,7 @@ async function fetchGatewaysDirect(env, NAME_MAP) {
     }
 
     rows.sort((a, b) => a.name.localeCompare(b.name, 'pt'));
+    rows.forEach((row, i) => { row.idx = i + 1; });
     return { ok: true, rows };
   } catch (e) {
     console.error('resiot error:', e);
@@ -663,15 +664,16 @@ function formatRowsAsTable(rows, filter /* "OK" | "NOK" | null */) {
 	const filtered = filter ? rows.filter((r) => (filter === "OK" ? r.emoji === "✅" : r.emoji === "❌")) : rows;
 	if (!filtered.length) return "<i>(sem dados)</i>";
 
-	const HN = "Nome", HW = "Quando", HS = "Ok";
+	const HI = "Nº", HN = "Nome", HW = "Quando", HS = "Ok";
+	const idxW = Math.max(HI.length, ...filtered.map((r) => String(r.idx || "").length));
 	const nameW = Math.max(HN.length, ...filtered.map((r) => (r.name || "").length));
 	const whenW = Math.max(HW.length, ...filtered.map((r) => (r.when || "").length));
 	const stateW = HS.length;
 
-	const header = `${padRight(HN, nameW)}|${padRight(HW, whenW)}|${HS}`;
-	const sep = `${"-".repeat(nameW)}+${"-".repeat(whenW)}+${"-".repeat(stateW)}`;
+	const header = `${padRight(HI, idxW)}|${padRight(HN, nameW)}|${padRight(HW, whenW)}|${HS}`;
+	const sep = `${"-".repeat(idxW)}+${"-".repeat(nameW)}+${"-".repeat(whenW)}+${"-".repeat(stateW)}`;
 	const body = filtered
-		.map((r) => `${padRight(r.name || "", nameW)}|${padRight(r.when || "", whenW)}|${r.emoji || ""}`)
+		.map((r) => `${padRight(String(r.idx || ""), idxW)}|${padRight(r.name || "", nameW)}|${padRight(r.when || "", whenW)}|${r.emoji || ""}`)
 		.join("\n");
 
 	return `<pre>${escapeHtml(`${header}\n${sep}\n${body}`)}</pre>`;
