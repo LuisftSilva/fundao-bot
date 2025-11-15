@@ -932,8 +932,7 @@ function formatRowsAsTable(rows, filter /* "OK" | "NOK" | null */) {
 		.map((r) => `${padRight(String(r.idx || ""), idxW)}|${padRight(r.name || "", nameW)}|${padRight(r.when || "", whenW)}|${r.emoji || ""}`)
 		.join("\n");
 
-	const table = `${header}\n${sep}\n${body}`;
-	return renderPreBlock(table);
+	return renderPreBlock(`${header}\n${sep}\n${body}`);
 }
 
 // ---------- Gist helpers (NDJSON + carry + snapshot) ----------
