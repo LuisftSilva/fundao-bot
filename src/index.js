@@ -921,8 +921,8 @@ function formatRowsAsTable(rows, filter /* "OK" | "NOK" | null */) {
 	if (!filtered.length) return "<i>(sem dados)</i>";
 
 	const HI = "Nº", HN = "Nome", HW = "Quando", HS = "Ok";
-	const NAME_MAX = 26;
-	const WHEN_MAX = 18;
+	const NAME_MAX = 18;
+	const WHEN_MAX = 14;
 	const mapped = filtered.map((r) => ({
 		idx: String(r.idx || ""),
 		name: truncateCell(r.name || "", NAME_MAX),
@@ -1359,7 +1359,7 @@ function formatDowntimeTableLines(rows) {
 	const nameLabel = "Gateway";
 	const downLabel = "Downtime";
 	const pctLabel = "%Down";
-	const NAME_MAX = 24;
+	const NAME_MAX = 18;
 	const mapped = rows.map((r) => ({
 		idx: String(r.idx || ""),
 		name: truncateCell(r.name || "", NAME_MAX),
