@@ -285,6 +285,8 @@ async function handleCommand(textIn, env, NAME_MAP) {
 			"• <code>/status</code> — all gateways",
 			"• <code>/status_ok</code> — only ✅",
 			"• <code>/status_nok</code> — only ❌",
+			"• <code>/history &lt;#idx&gt; [dias]</code> — uptime/downtime histórico",
+			"  Ex: <code>/history 7</code> (7 dias) ou <code>/history 7 30</code> (30 dias)",
 			"• <code>/ping</code> — test"
 		].join("\n")];
 	}
@@ -380,7 +382,7 @@ async function handleCommand(textIn, env, NAME_MAP) {
 			return ['<i>Falha a obter série — vê os logs.</i>'];
 		}
 
-		const { slots, pctUp, eventsCount, offMs } = rec;
+		const { slots, pctUp, eventsCount, offMs, transitions = [] } = rec;
 		const preview = slots.slice(0, 120);
 		console.log('[history] result', {
 			idx,
@@ -394,15 +396,14 @@ async function handleCommand(textIn, env, NAME_MAP) {
 			slotsLen: slots.length,
 			pctUp,
 			offMs,
+			transitionsCount: transitions.length,
 			slotsPreview: preview,
 		});
 		// Dump all 5-min states (grouped per hour) to logs
 		logSlotsHourLines('history', start, slots, stepMin);
-		const msg = [
-			`<b>${escapeHtml(entry.name)}</b>`,
-			`EUI: <code>${escapeHtml(entry.gwEUI)}</code>`,
-			`Código: <code>${escapeHtml(entry.code || '-')}</code>`
-		].join('\n');
+
+		// Format uptime report for user
+		const msg = formatUptimeReport(entry, days, rec, start, now, transitions);
 		return [msg];
 	}
 
@@ -862,10 +863,11 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5) {
 
 		// 3) Sort events and count in window
 		events.sort((a, b) => parseLisbonWall(a.t) - parseLisbonWall(b.t));
-		const eventsCountInWindow = events.filter(e => {
+		const transitionsInWindow = events.filter(e => {
 			const tt = parseLisbonWall(e.t);
 			return tt > start && tt <= end;
-		}).length;
+		});
+		const eventsCountInWindow = transitionsInWindow.length;
 
 		console.log('[fetch] events', { gwEUI, months: months.length, files: touched.length, eventsTotal: events.length, eventsInWindow: eventsCountInWindow });
 
@@ -925,7 +927,7 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5) {
 		}
 
 		const offMs = Math.max(0, totalMs - upMs);
-		return { ok: true, slots, pctUp, eventsCount: eventsCountInWindow, offMs };
+		return { ok: true, slots, pctUp, eventsCount: eventsCountInWindow, offMs, transitions: transitionsInWindow };
 	} catch (e) {
 		return { ok: false, err: String(e) };
 	}
@@ -941,6 +943,54 @@ function fmtDur(ms) {
 	if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
 	if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`;
 	return `${s}s`;
+}
+
+// Format uptime report for Telegram
+function formatUptimeReport(entry, days, rec, start, end, transitions = []) {
+	const { pctUp, offMs } = rec;
+	const totalMs = end - start;
+	const upMs = totalMs - offMs;
+
+	const pctDown = 100 - pctUp;
+	const durUp = fmtDur(upMs);
+	const durDown = fmtDur(offMs);
+
+	// Format dates in Lisbon time
+	const startStr = formatLisbonDateTime(start);
+	const endStr = formatLisbonDateTime(end);
+
+	const lines = [
+		`<b>${escapeHtml(entry.name)}</b>`,
+		`EUI: <code>${escapeHtml(entry.gwEUI)}</code>`,
+		`Código: <code>${escapeHtml(entry.code || '-')}</code>`,
+		``,
+		`<b>Período:</b> ${days} dia${days > 1 ? 's' : ''}`,
+		`De: ${escapeHtml(startStr)}`,
+		`Até: ${escapeHtml(endStr)}`,
+		``,
+		`<b>Uptime:</b> ${pctUp.toFixed(2)}% ✅`,
+		`Tempo online: ${durUp}`,
+		``,
+		`<b>Downtime:</b> ${pctDown.toFixed(2)}% ❌`,
+		`Tempo offline: ${durDown}`,
+	];
+
+	// Show recent transitions (max 10 most recent)
+	if (transitions.length > 0) {
+		lines.push(``);
+		lines.push(`<b>Transições recentes:</b>`);
+		const recent = transitions.slice(-10).reverse(); // last 10, most recent first
+		for (const tr of recent) {
+			const emoji = tr.s === 1 ? '✅' : '❌';
+			const status = tr.s === 1 ? 'Online' : 'Offline';
+			lines.push(`${emoji} ${escapeHtml(tr.t)} — ${status}`);
+		}
+		if (transitions.length > 10) {
+			lines.push(`<i>(+ ${transitions.length - 10} transições anteriores)</i>`);
+		}
+	}
+
+	return lines.join('\n');
 }
 
 // Legacy-safe normalizer: "OK"/"NOK", booleans, "1"/"0" -> 1/0
