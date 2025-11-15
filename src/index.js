@@ -921,15 +921,23 @@ function formatRowsAsTable(rows, filter /* "OK" | "NOK" | null */) {
 	if (!filtered.length) return "<i>(sem dados)</i>";
 
 	const HI = "Nº", HN = "Nome", HW = "Quando", HS = "Ok";
-	const idxW = Math.max(HI.length, ...filtered.map((r) => String(r.idx || "").length));
-	const nameW = Math.max(HN.length, ...filtered.map((r) => (r.name || "").length));
-	const whenW = Math.max(HW.length, ...filtered.map((r) => (r.when || "").length));
+	const NAME_MAX = 26;
+	const WHEN_MAX = 18;
+	const mapped = filtered.map((r) => ({
+		idx: String(r.idx || ""),
+		name: truncateCell(r.name || "", NAME_MAX),
+		when: truncateCell(r.when || "", WHEN_MAX),
+		state: r.emoji || "",
+	}));
+	const idxW = Math.max(HI.length, ...mapped.map((r) => r.idx.length));
+	const nameW = Math.max(HN.length, ...mapped.map((r) => r.name.length));
+	const whenW = Math.max(HW.length, ...mapped.map((r) => r.when.length));
 	const stateW = HS.length;
 
 	const header = `${padRight(HI, idxW)}|${padRight(HN, nameW)}|${padRight(HW, whenW)}|${HS}`;
 	const sep = `${"-".repeat(idxW)}+${"-".repeat(nameW)}+${"-".repeat(whenW)}+${"-".repeat(stateW)}`;
-	const body = filtered
-		.map((r) => `${padRight(String(r.idx || ""), idxW)}|${padRight(r.name || "", nameW)}|${padRight(r.when || "", whenW)}|${r.emoji || ""}`)
+	const body = mapped
+		.map((r) => `${padRight(r.idx, idxW)}|${padRight(r.name, nameW)}|${padRight(r.when, whenW)}|${r.state}`)
 		.join("\n");
 
 	return renderPreBlock(`${header}\n${sep}\n${body}`);
@@ -1351,18 +1359,21 @@ function formatDowntimeTableLines(rows) {
 	const nameLabel = "Gateway";
 	const downLabel = "Downtime";
 	const pctLabel = "%Down";
-	const idxW = Math.max(idxLabel.length, ...rows.map((r) => String(r.idx || "").length));
-	const nameW = Math.max(nameLabel.length, ...rows.map((r) => (r.name || "").length));
+	const NAME_MAX = 24;
+	const mapped = rows.map((r) => ({
+		idx: String(r.idx || ""),
+		name: truncateCell(r.name || "", NAME_MAX),
+		downStr: fmtDur(r.downtimeMs),
+		pctStr: formatPctValue(r.pctDown),
+	}));
+	const idxW = Math.max(idxLabel.length, ...mapped.map((r) => r.idx.length));
+	const nameW = Math.max(nameLabel.length, ...mapped.map((r) => r.name.length));
 	const downW = Math.max(downLabel.length, ...rows.map((r) => fmtDur(r.downtimeMs).length));
 	const pctW = Math.max(pctLabel.length, ...rows.map((r) => formatPctValue(r.pctDown).length));
 	const header = `${padRight(idxLabel, idxW)} | ${padRight(nameLabel, nameW)} | ${padRight(downLabel, downW)} | ${padRight(pctLabel, pctW)}`;
 	const sep = `${"-".repeat(idxW)}-+-${"-".repeat(nameW)}-+-${"-".repeat(downW)}-+-${"-".repeat(pctW)}`;
-	const body = rows.map((r) => {
-		const idxStr = String(r.idx);
-		const nameStr = r.name || "-";
-		const downStr = fmtDur(r.downtimeMs);
-		const pctStr = formatPctValue(r.pctDown);
-		return `${padRight(idxStr, idxW)} | ${padRight(nameStr, nameW)} | ${padRight(downStr, downW)} | ${padRight(pctStr, pctW)}`;
+	const body = mapped.map((r) => {
+		return `${padRight(r.idx, idxW)} | ${padRight(r.name, nameW)} | ${padRight(r.downStr, downW)} | ${padRight(r.pctStr, pctW)}`;
 	});
 	return [header, sep, ...body];
 }
@@ -1370,6 +1381,13 @@ function formatDowntimeTableLines(rows) {
 function formatPctValue(v) {
 	if (!Number.isFinite(v)) return "-";
 	return `${v.toFixed(1)}%`;
+}
+
+function truncateCell(str, maxLen) {
+	if (!str) return "";
+	if (str.length <= maxLen) return str;
+	if (maxLen <= 1) return str.slice(0, maxLen);
+	return str.slice(0, maxLen - 1) + "…";
 }
 
 // Legacy-safe normalizer: "OK"/"NOK", booleans, "1"/"0" -> 1/0
