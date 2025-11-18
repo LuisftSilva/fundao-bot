@@ -21,7 +21,7 @@ jobs:
         # É aqui que está o index.html no repo
         local-dir: ./public/
         # Pasta raiz do site no Plesk
-        server-dir: /httpdocs
+        server-dir: /httpdocs/
         exclude: |
           **/.git*
           **/.github*
