@@ -18,14 +18,11 @@ jobs:
         server: ${{ secrets.FTP_SERVER }}
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
-        # Raiz local do projeto (onde está o index.html)
-        local-dir: ./
-        # Pasta de destino no Plesk (normalmente httpdocs)
+        # É aqui que está o index.html no repo
+        local-dir: ./public
+        # Pasta raiz do site no Plesk
         server-dir: /httpdocs
-        # Opcional: não enviar lixo
         exclude: |
           **/.git*
           **/.github*
           **/node_modules*
-          **/README.md
-          **/package-lock.json
