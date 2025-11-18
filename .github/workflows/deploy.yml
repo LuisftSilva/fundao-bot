@@ -1,4 +1,4 @@
-name: Deploy to Plesk via FTP
+name: Deploy static site to Plesk via FTP
 
 on:
   push:
@@ -12,22 +12,20 @@ jobs:
     - name: Checkout repo
       uses: actions/checkout@v3
 
-    - name: Install Node (ajusta se precisares outra versão)
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
-
-    - name: Install dependencies
-      run: npm install
-
-    - name: Build project
-      run: npm run build
-
     - name: Deploy via FTP
       uses: SamKirkland/FTP-Deploy-Action@v4.3.4
       with:
         server: ${{ secrets.FTP_SERVER }}
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
-        local-dir: ./dist
+        # Raiz local do projeto (onde está o index.html)
+        local-dir: ./
+        # Pasta de destino no Plesk (normalmente httpdocs)
         server-dir: /httpdocs
+        # Opcional: não enviar lixo
+        exclude: |
+          **/.git*
+          **/.github*
+          **/node_modules*
+          **/README.md
+          **/package-lock.json
