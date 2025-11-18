@@ -19,7 +19,7 @@ jobs:
         username: ${{ secrets.FTP_USERNAME }}
         password: ${{ secrets.FTP_PASSWORD }}
         # É aqui que está o index.html no repo
-        local-dir: ./public
+        local-dir: ./public/
         # Pasta raiz do site no Plesk
         server-dir: /httpdocs
         exclude: |
