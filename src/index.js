@@ -34,6 +34,10 @@ const REQUEST_ACCESS_KEYBOARD = {
 	one_time_keyboard: true,
 };
 const HISTORY_PROMPTS = new Map(); // chatId -> { type: "history"|"downtime", stage: string, idx?: number }
+const NAME_OVERRIDES = {
+	FND_GW_RS_00007A_QICRVJ: "Qt Cereja & Ideias",
+	FND_GW_RS_000013A_SERRAS: "Castro Covilhã Velha",
+};
 
 // ---- Uptime storage (Gist) ----
 // Snapshot "agora":
@@ -96,7 +100,7 @@ export default {
 				return new Response("method not allowed", { status: 405 });
 			}
 
-			if (!NAME_MAP_CACHE) NAME_MAP_CACHE = parseJson(env.GATEWAY_NAMES_JSON) || {};
+		if (!NAME_MAP_CACHE) NAME_MAP_CACHE = loadNameMap(env);
 
 			const update = await safeJson(request) || {};
 			const msg = update.message ?? update.callback_query?.message;
@@ -138,8 +142,8 @@ export default {
 
 	// Cron (*/5 * * * *): só grava TRANSIÇÕES (NDJSON) e mantém snapshot + carry mensal.
 	async scheduled(event, env, ctx) {
-		try {
-			if (!NAME_MAP_CACHE) NAME_MAP_CACHE = parseJson(env.GATEWAY_NAMES_JSON) || {};
+			try {
+				if (!NAME_MAP_CACHE) NAME_MAP_CACHE = loadNameMap(env);
 			const now = new Date();
 
 			// 1) estados atuais
@@ -565,6 +569,19 @@ function welcomeKeyboardBlock() {
 
 function forceReplyMarkup() {
 	return { force_reply: true, selective: false };
+}
+
+function loadNameMap(env) {
+	const parsed = parseJson(env.GATEWAY_NAMES_JSON) || {};
+	return applyNameOverrides(parsed);
+}
+
+function applyNameOverrides(map) {
+	const out = { ...(map || {}) };
+	for (const [key, value] of Object.entries(NAME_OVERRIDES)) {
+		out[key] = value;
+	}
+	return out;
 }
 
 function renderPreBlock(text) {
