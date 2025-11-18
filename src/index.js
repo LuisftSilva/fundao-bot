@@ -35,8 +35,12 @@ const REQUEST_ACCESS_KEYBOARD = {
 };
 const HISTORY_PROMPTS = new Map(); // chatId -> { type: "history"|"downtime", stage: string, idx?: number }
 const NAME_OVERRIDES = {
-	FND_GW_RS_00007A_QICRVJ: "Qt Cereja & Ideias",
-	FND_GW_RS_000013A_SERRAS: "Castro Covilhã Velha",
+	FND_GW_RS_00007A_QICRVJ: "Quinta da Cereja",
+	FND_GW_RS_000013A_SERRAS: "Castro da Covilhã Velha",
+};
+const NAME_CODE_OVERRIDES = {
+	"Qt Ciência Viva": "Quinta da Cereja",
+	Serra: "Castro da Covilhã Velha",
 };
 
 // ---- Uptime storage (Gist) ----
@@ -579,6 +583,9 @@ function loadNameMap(env) {
 function applyNameOverrides(map) {
 	const out = { ...(map || {}) };
 	for (const [key, value] of Object.entries(NAME_OVERRIDES)) {
+		out[key] = value;
+	}
+	for (const [key, value] of Object.entries(NAME_CODE_OVERRIDES)) {
 		out[key] = value;
 	}
 	return out;
