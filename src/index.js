@@ -125,6 +125,21 @@ export default {
 			}
 		}
 
+		if (url.pathname === "/clean-gist") {
+			try {
+				const result = await cleanGistHistory(env);
+				return new Response(JSON.stringify(result, null, 2), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			} catch (e) {
+				return new Response(
+					JSON.stringify({ ok: false, error: String(e) }, null, 2),
+					{ status: 500, headers: { "content-type": "application/json" } }
+				);
+			}
+		}
+
 		try {
 			if (url.pathname === "/health") return new Response("ok");
 			if (!url.pathname.startsWith("/webhook")) {
@@ -1935,6 +1950,58 @@ async function fixGistTimestamps(env) {
 		filesFixed,
 		timestampsFixed: totalTimestampsFixed,
 	};
+}
+
+// Clean all uptime history from Gist (WARNING: destructive!)
+async function cleanGistHistory(env) {
+	try {
+		const gist = await gistGet(env);
+
+		// Find all uptime-related files
+		const uptimeFiles = Object.keys(gist.files).filter(name =>
+			name === SNAPSHOT_FILE ||
+			name.startsWith(MONTH_PREFIX) ||
+			name.startsWith(CARRY_PREFIX)
+		);
+
+		if (uptimeFiles.length === 0) {
+			return {
+				ok: true,
+				message: 'No uptime files found to clean',
+				filesDeleted: 0,
+				files: [],
+			};
+		}
+
+		// Prepare deletion (set content to null to delete files)
+		const updates = {};
+		for (const filename of uptimeFiles) {
+			updates[filename] = null;
+		}
+
+		// Delete all uptime files
+		const url = `${GH_API}/gists/${env.GITHUB_GIST_ID}`;
+		const r = await fetch(url, {
+			method: 'PATCH',
+			headers: { ...ghHeaders(env), 'content-type': 'application/json' },
+			body: JSON.stringify({ files: updates }),
+		});
+
+		if (!r.ok) {
+			const text = await r.text().catch(() => '');
+			throw new Error(`Failed to update gist: ${r.status} ${text}`);
+		}
+
+		return {
+			ok: true,
+			message: 'Successfully cleaned all uptime history from Gist',
+			filesDeleted: uptimeFiles.length,
+			files: uptimeFiles,
+			note: 'Fresh data will be collected starting from the next cron run (every 5 minutes)',
+		};
+	} catch (e) {
+		return { ok: false, error: String(e) };
+	}
 }
 
 // Debug gateway status - shows detailed information about what the bot sees
