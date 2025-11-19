@@ -706,7 +706,7 @@ async function buildDowntimeReport(days, env, NAME_MAP) {
 	const DAY_MS = 24 * 60 * 60 * 1000;
 
 	const rows = [];
-	const gistCache = { carries: new Map(), transitions: new Map() };
+	const gistCache = { carries: new Map(), transitions: new Map(), snapshot: undefined };
 	let summaryStartMs = start.getTime();
 	for (const entry of list.items) {
 		const rec = await fetchSeriesForGateway(env, entry.gwEUI, start, now, stepMin, gistCache);
@@ -1094,6 +1094,26 @@ async function gistReadJsonSafe(env, filename) {
 	}
 }
 
+async function readSnapshotState(env, gwEUI, gistCache) {
+	let snapshotObj = null;
+	if (gistCache) {
+		if (typeof gistCache.snapshot === "undefined") {
+			try {
+				gistCache.snapshot = await gistReadJsonSafe(env, SNAPSHOT_FILE);
+			} catch {
+				gistCache.snapshot = {};
+			}
+		}
+		snapshotObj = gistCache.snapshot;
+	} else {
+		snapshotObj = await gistReadJsonSafe(env, SNAPSHOT_FILE);
+	}
+	if (snapshotObj && typeof snapshotObj === "object" && Object.prototype.hasOwnProperty.call(snapshotObj, gwEUI)) {
+		return to01(snapshotObj[gwEUI]);
+	}
+	return null;
+}
+
 // Escreve JSON (substitui)
 async function gistWriteJson(env, filename, obj) {
 	const url = `${GH_API}/gists/${env.GITHUB_GIST_ID}`;
@@ -1215,7 +1235,7 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCa
 		// 2) Load monthly carry and transitions
 		let initState = undefined;
 		let initStateTs = null;
-		const events = [];
+		let events = [];
 		const touched = [];
 
 		const carryCache = gistCache?.carries;
@@ -1286,15 +1306,38 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCa
 			return { ok: false, err: "Sem histórico no intervalo pedido" };
 		}
 
+		const snapshotState = await readSnapshotState(env, gwEUI, gistCache);
+		let truncatedToEarliest = false;
+		let assumeOnlineFromSnapshot = false;
+
 		if (initState === undefined) {
 			if (earliestRecordMs !== null) {
-				if (earliestRecordMs > rangeStart.getTime()) {
+				const startMs = rangeStart.getTime();
+				if (earliestRecordMs > startMs) {
 					rangeStart = new Date(earliestRecordMs);
+					truncatedToEarliest = true;
 				}
 				initState = earliestRecordState;
+			} else if (snapshotState !== null) {
+				initState = snapshotState;
 			} else {
 				return { ok: false, err: "Sem histórico disponível" };
 			}
+		}
+
+		if (truncatedToEarliest && snapshotState === 1 && initState === 0) {
+			initState = 1;
+			assumeOnlineFromSnapshot = true;
+			const startMs = rangeStart.getTime();
+			let removed = false;
+			events = events.filter(ev => {
+				const evMs = ev?._date?.getTime?.();
+				if (!removed && Number.isFinite(evMs) && evMs === startMs && to01(ev.s) === 0) {
+					removed = true;
+					return false;
+				}
+				return true;
+			});
 		}
 
 		if (rangeStart >= rangeEnd) {
@@ -1318,6 +1361,7 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCa
 			eventsInWindow: eventsCountInWindow,
 			startRequested: requestedStart.toISOString(),
 			startUsed: rangeStart.toISOString(),
+			assumedOnlineFromSnapshot: assumeOnlineFromSnapshot,
 		});
 
 		// 4) Determine state at start by applying events up to start
