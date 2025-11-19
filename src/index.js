@@ -21,9 +21,9 @@ const MENU_KEYBOARD = {
 	keyboard: [
 		[
 			{ text: "📊 Status" },
-			{ text: "📈 Histórico" },
+			{ text: "📈 Downtime GW" },
 		],
-		[{ text: "⏱️ Downtime" }],
+		[{ text: "⏱️ Downtime Geral" }],
 	],
 	resize_keyboard: true,
 	one_time_keyboard: false,
@@ -874,6 +874,10 @@ function detectMenuShortcut(text) {
 	const cleaned = stripDiacritics(text).toLowerCase().replace(/[^\w\s/]/g, "").trim();
 	if (!cleaned || cleaned.startsWith("/")) return null;
 	if (cleaned.endsWith("status")) return "status";
+	// Check for specific button names first (order matters!)
+	if (cleaned.includes("downtime gw") || cleaned.includes("downtime gateway")) return "history";
+	if (cleaned.includes("downtime geral") || cleaned.includes("downtime all")) return "downtime";
+	// Legacy support
 	if (cleaned.endsWith("historico")) return "history";
 	if (cleaned.includes("downtime") || cleaned.includes("offline")) return "downtime";
 	return null;
