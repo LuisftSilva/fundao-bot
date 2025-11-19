@@ -157,8 +157,10 @@ export default {
 			// 2) carregar último snapshot
 			const prev = await gistReadJsonSafe(env, SNAPSHOT_FILE);
 
+			// Arredondar para o múltiplo de 5 minutos mais próximo para eliminar atrasos do cron
+			const roundedNow = roundToNearestInterval(now, 5);
 			// Guardar em hora de Lisboa (wall-clock), sem sufixo de timezone
-			const ts = lisbonWallIso(now);
+			const ts = lisbonWallIso(roundedNow);
 			const additions = [];
 			const next = {};
 			for (const it of probe.items) {
@@ -1017,6 +1019,14 @@ function logSlotsHourLines(label, start, slots, stepMin) {
 }
 
 // ---------- Dates / formatting ----------
+
+// Round timestamp to nearest interval (in minutes) to eliminate cron delay jitter
+function roundToNearestInterval(date, intervalMinutes) {
+	const ms = date.getTime();
+	const intervalMs = intervalMinutes * 60 * 1000;
+	const rounded = Math.round(ms / intervalMs) * intervalMs;
+	return new Date(rounded);
+}
 
 // Lisbon wall-clock ISO without timezone (e.g., "2025-09-22T18:05:26")
 function lisbonWallIso(d) {
