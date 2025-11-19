@@ -102,6 +102,29 @@ export default {
 			}
 		}
 
+		if (url.pathname.startsWith("/debug-gateway")) {
+			try {
+				if (!NAME_MAP_CACHE) NAME_MAP_CACHE = loadNameMap(env);
+				const gwName = url.searchParams.get("name");
+				if (!gwName) {
+					return new Response(
+						JSON.stringify({ ok: false, error: "Missing 'name' query parameter. Usage: /debug-gateway?name=FND_GW_RS_00006A_JFSILV" }, null, 2),
+						{ status: 400, headers: { "content-type": "application/json" } }
+					);
+				}
+				const result = await debugGatewayStatus(gwName, env, NAME_MAP_CACHE);
+				return new Response(JSON.stringify(result, null, 2), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			} catch (e) {
+				return new Response(
+					JSON.stringify({ ok: false, error: String(e) }, null, 2),
+					{ status: 500, headers: { "content-type": "application/json" } }
+				);
+			}
+		}
+
 		try {
 			if (url.pathname === "/health") return new Response("ok");
 			if (!url.pathname.startsWith("/webhook")) {
@@ -884,9 +907,20 @@ async function fetchGatewaysDirect(env, NAME_MAP) {
       const fullName = NAME_MAP[code] || code;
       const timeoutSec = Number(g?.timeout) > 0 ? Number(g.timeout) : FALLBACK_TIMEOUT_SEC;
 
-      // Prefer LastUplink, then Radio, then Monitor
-      const lastRaw = g?.LastUplink || g?.LastAliveRadio || g?.LastAliveMonitor || '';
-      const lastDate = parseResiotTime(lastRaw);
+      // Use the MOST RECENT timestamp from any source (not priority order)
+      const candidates = [
+        { raw: g?.LastUplink, date: parseResiotTime(g?.LastUplink) },
+        { raw: g?.LastAliveRadio, date: parseResiotTime(g?.LastAliveRadio) },
+        { raw: g?.LastAliveMonitor, date: parseResiotTime(g?.LastAliveMonitor) },
+      ].filter(c => c.date instanceof Date);
+
+      // Select the most recent
+      const lastEntry = candidates.length > 0
+        ? candidates.reduce((a, b) => (a.date > b.date ? a : b))
+        : { raw: '', date: null };
+
+      const lastRaw = lastEntry.raw;
+      const lastDate = lastEntry.date;
       const whenStr = normalizeToLisbon(lastRaw, lastDate);
 
       let emoji = '❌';
@@ -931,8 +965,18 @@ async function currentStates(env, NAME_MAP, now) {
       const fullName = NAME_MAP[code] || code;
       const timeoutSec = Number(g?.timeout) > 0 ? Number(g.timeout) : FALLBACK_TIMEOUT_SEC;
 
-      let raw = g?.LastUplink || g?.LastAliveRadio || g?.LastAliveMonitor || null;
-      let last = raw ? parseResiotTime(raw) : null;
+      // Use the MOST RECENT timestamp from any source (not priority order)
+      const candidates = [
+        { raw: g?.LastUplink, date: parseResiotTime(g?.LastUplink) },
+        { raw: g?.LastAliveRadio, date: parseResiotTime(g?.LastAliveRadio) },
+        { raw: g?.LastAliveMonitor, date: parseResiotTime(g?.LastAliveMonitor) },
+      ].filter(c => c.date instanceof Date);
+
+      // Select the most recent
+      let last = null;
+      if (candidates.length > 0) {
+        last = candidates.reduce((a, b) => (a.date > b.date ? a : b)).date;
+      }
 
       // optional fallback: /lastmessage
       if (!last && gwEUI && gwEUI !== code) {
@@ -1891,6 +1935,132 @@ async function fixGistTimestamps(env) {
 		filesFixed,
 		timestampsFixed: totalTimestampsFixed,
 	};
+}
+
+// Debug gateway status - shows detailed information about what the bot sees
+async function debugGatewayStatus(gwName, env, NAME_MAP) {
+	const base = String(env.RESIOT_BASE || '').trim().replace(/\/+$/, '');
+	const token = env.RESIOT_TOKEN || '';
+	if (!base || !/^https?:\/\//i.test(base) || !token) {
+		return { ok: false, error: 'Missing RESIOT_BASE or RESIOT_TOKEN' };
+	}
+
+	try {
+		const now = new Date();
+		const r = await fetch(`${base}/api/gateways?limit=1000`, {
+			headers: { accept: 'application/json', 'Grpc-Metadata-Authorization': token },
+		});
+		if (!r.ok) return { ok: false, error: `API error: ${r.status}` };
+
+		const j = await r.json().catch(() => ({}));
+		const arr = Array.isArray(j?.result) ? j.result : [];
+		const gw = arr.find(g => g?.name === gwName);
+
+		if (!gw) {
+			return {
+				ok: false,
+				error: `Gateway '${gwName}' not found`,
+				available: arr.map(g => g?.name).filter(Boolean),
+			};
+		}
+
+		const timeoutSec = Number(gw?.timeout) > 0 ? Number(gw.timeout) : FALLBACK_TIMEOUT_SEC;
+		const gwEUI = gw?.gwEUI || gw?.GatewayEUI || gw?.eui || gwName;
+
+		// Get all timestamp sources
+		const timestamps = {
+			LastUplink: gw?.LastUplink || null,
+			LastAliveRadio: gw?.LastAliveRadio || null,
+			LastAliveMonitor: gw?.LastAliveMonitor || null,
+		};
+
+		// Parse each timestamp
+		const parsed = {};
+		const ages = {};
+		for (const [key, raw] of Object.entries(timestamps)) {
+			if (raw) {
+				const date = parseResiotTime(raw);
+				parsed[key] = date ? date.toISOString() : null;
+				ages[key] = date ? Math.floor((now - date) / 1000) : null;
+			} else {
+				parsed[key] = null;
+				ages[key] = null;
+			}
+		}
+
+		// Determine which source is used (most recent timestamp)
+		const candidatesList = [
+			{ source: 'LastUplink', raw: timestamps.LastUplink, date: parsed.LastUplink ? new Date(parsed.LastUplink) : null },
+			{ source: 'LastAliveRadio', raw: timestamps.LastAliveRadio, date: parsed.LastAliveRadio ? new Date(parsed.LastAliveRadio) : null },
+			{ source: 'LastAliveMonitor', raw: timestamps.LastAliveMonitor, date: parsed.LastAliveMonitor ? new Date(parsed.LastAliveMonitor) : null },
+		].filter(c => c.date instanceof Date);
+
+		const selected = candidatesList.length > 0
+			? candidatesList.reduce((a, b) => (a.date > b.date ? a : b))
+			: { source: null, raw: null, date: null };
+
+		const selectedSource = selected.source;
+		const selectedRaw = selected.raw;
+		const selectedDate = selected.date;
+		const selectedAgeMs = selectedDate ? (now - selectedDate) : null;
+		const selectedAgeSec = selectedAgeMs ? Math.floor(selectedAgeMs / 1000) : null;
+
+		// Determine status
+		const isOnline = selectedDate && selectedAgeMs <= timeoutSec * 1000;
+
+		// Try to get lastmessage endpoint
+		let lastmessageData = null;
+		if (gwEUI && gwEUI !== gwName) {
+			try {
+				const r2 = await fetch(`${base}/api/gateways/${encodeURIComponent(gwEUI)}/lastmessage`, {
+					headers: { accept: 'application/json', 'Grpc-Metadata-Authorization': token },
+				});
+				if (r2.ok) {
+					lastmessageData = await r2.json().catch(() => null);
+				}
+			} catch (e) {
+				lastmessageData = { error: String(e) };
+			}
+		}
+
+		return {
+			ok: true,
+			gateway: {
+				name: gwName,
+				gwEUI,
+				fullName: NAME_MAP[gwName] || gwName,
+			},
+			status: {
+				isOnline,
+				emoji: isOnline ? '✅' : '❌',
+			},
+			timeout: {
+				configuredSec: timeoutSec,
+				configuredMin: Math.floor(timeoutSec / 60),
+				isFallback: !(Number(gw?.timeout) > 0),
+			},
+			timestamps: {
+				raw: timestamps,
+				parsed: parsed,
+				ageSeconds: ages,
+			},
+			selected: {
+				source: selectedSource,
+				raw: selectedRaw,
+				parsed: selectedDate ? selectedDate.toISOString() : null,
+				ageSeconds: selectedAgeSec,
+				ageMinutes: selectedAgeSec ? (selectedAgeSec / 60).toFixed(1) : null,
+				exceedsTimeout: selectedAgeSec > timeoutSec,
+			},
+			lastmessage: lastmessageData,
+			debugTime: {
+				now: now.toISOString(),
+				nowLisbon: lisbonWallIso(now),
+			},
+		};
+	} catch (e) {
+		return { ok: false, error: String(e) };
+	}
 }
 
 // Build index list (sorted by name) including gwEUI and user-friendly name
