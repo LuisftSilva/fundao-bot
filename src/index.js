@@ -493,6 +493,17 @@ async function handleCommand(chatId, textIn, env, NAME_MAP, ctx) {
 		return [downtimeProcessingMessage(days)];
 	}
 
+	if (commandText?.startsWith("/debug")) {
+		const parts = commandText.split(/\s+/).filter(Boolean);
+		const idx = Number(parts[1]);
+		let days = Number(parts[2]) || 90;
+		if (!Number.isFinite(idx) || idx <= 0) {
+			return ['Uso: <code>/debug &lt;índice&gt; [dias=90]</code>\nMostra informação de debug do cálculo de downtime.'];
+		}
+		days = clampDays(days);
+		return await debugDowntimeCalculation(idx, days, env, NAME_MAP);
+	}
+
 	return ["<i>Say</i> <code>/status</code> <i>to view the table</i>."];
 }
 
@@ -694,6 +705,63 @@ async function fulfillHistoryRequest(idx, days, env, NAME_MAP) {
 	logSlotsHourLines('history', effectiveStart, slots, stepMin);
 
 	return formatUptimeReport(entry, windowDays, rec, effectiveStart, now, transitions);
+}
+
+async function debugDowntimeCalculation(idx, days, env, NAME_MAP) {
+	const list = await buildIndexList(env, NAME_MAP);
+	if (!list.ok) return [`<i>Falha a obter índice</i>: ${escapeHtml(list.err || "erro")}`];
+
+	const entry = list.items.find(r => r.idx === idx);
+	if (!entry) return ["<i>Índice não encontrado.</i>"];
+
+	const now = new Date();
+	const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+	const stepMin = (days <= 7 ? 5 : 60);
+
+	const rec = await fetchSeriesForGateway(env, entry.gwEUI, start, now, stepMin);
+	if (!rec.ok) {
+		return [`<i>Falha a calcular</i>: ${escapeHtml(rec.err || "erro")}`];
+	}
+
+	const { pctUp, offMs, eventsCount, effectiveStart, debugIntervals = [], debugInfo = {} } = rec;
+	const effectiveStartDate = effectiveStart ? new Date(effectiveStart) : start;
+	const totalMs = now - effectiveStartDate;
+	const upMs = totalMs - offMs;
+
+	const lines = [
+		`<b>Debug: ${escapeHtml(entry.name)}</b>`,
+		`EUI: <code>${escapeHtml(entry.gwEUI)}</code>`,
+		``,
+		`<b>Período pedido:</b> ${days} dias`,
+		`Início pedido: ${formatLisbonDateTime(start)}`,
+		`Início efetivo: ${formatLisbonDateTime(effectiveStartDate)}`,
+		`Fim: ${formatLisbonDateTime(now)}`,
+		``,
+		`<b>Estatísticas:</b>`,
+		`Eventos/transições: ${eventsCount}`,
+		`Total intervalos: ${debugInfo.intervalsCount || 0}`,
+		`Total: ${fmtDur(totalMs)} (${Math.floor(totalMs/1000)}s)`,
+		`Uptime: ${fmtDur(upMs)} (${Math.floor(upMs/1000)}s)`,
+		`Downtime: ${fmtDur(offMs)} (${Math.floor(offMs/1000)}s)`,
+		``,
+		`% Uptime: ${pctUp.toFixed(2)}%`,
+		`% Downtime: ${(100-pctUp).toFixed(2)}%`,
+		``,
+		`<b>Estados:</b>`,
+		`initState: ${debugInfo.initState}`,
+		`stateAtStart: ${debugInfo.stateAtStart}`,
+		`snapshotState: ${debugInfo.snapshotState}`,
+	];
+
+	if (debugIntervals.length > 0) {
+		lines.push('', '<b>Primeiros intervalos:</b>');
+		debugIntervals.forEach((iv, i) => {
+			const dur = iv.to - iv.from;
+			lines.push(`${i+1}. ${iv.s === 1 ? '✅' : '❌'} ${fmtDur(dur)} (${formatLisbonDateTime(iv.from)} → ${formatLisbonDateTime(iv.to)})`);
+		});
+	}
+
+	return [lines.join('\n')];
 }
 
 async function buildDowntimeReport(days, env, NAME_MAP) {
@@ -1396,6 +1464,33 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCa
 		}
 		const pctUp = (upMs / totalMs) * 100;
 
+		// DEBUG: Log suspicious downtime values
+		const offMsDebug = Math.max(0, totalMs - upMs);
+		const offSecDebug = Math.floor(offMsDebug / 1000);
+		if (offSecDebug > 0 && offSecDebug < 3600) {
+			console.log('[DEBUG downtime]', {
+				gwEUI,
+				offMs: offMsDebug,
+				offSec: offSecDebug,
+				totalMs,
+				upMs,
+				totalSec: Math.floor(totalMs / 1000),
+				upSec: Math.floor(upMs / 1000),
+				intervalsCount: intervals.length,
+				intervals: intervals.map(iv => ({
+					from: iv.from.toISOString(),
+					to: iv.to.toISOString(),
+					s: iv.s,
+					durationMs: iv.to - iv.from,
+					durationSec: Math.floor((iv.to - iv.from) / 1000)
+				})),
+				eventsCount: events.length,
+				stateAtStart,
+				initState,
+				snapshotState,
+			});
+		}
+
 		// 7) Rasterize into slots
 		const stepMs = stepMin * 60 * 1000;
 		const totalSteps = Math.max(1, Math.ceil((rangeEnd - rangeStart) / stepMs));
@@ -1429,6 +1524,16 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCa
 			offMs,
 			transitions: transitionsInWindow,
 			effectiveStart: rangeStart,
+			debugIntervals: intervals.slice(0, 10), // First 10 intervals for debugging
+			debugInfo: {
+				totalMs,
+				upMs,
+				offMs,
+				stateAtStart,
+				initState,
+				snapshotState,
+				intervalsCount: intervals.length,
+			}
 		};
 	} catch (e) {
 		return { ok: false, err: String(e) };

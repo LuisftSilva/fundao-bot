@@ -1,8 +1,9 @@
 name: Deploy static site to Plesk via FTP
 
+# Disabled - this project is a Cloudflare Worker, not a static site
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "disabled-main" ]
 
 jobs:
   deploy:
