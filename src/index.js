@@ -87,6 +87,21 @@ export default {
 			}
 		}
 
+		if (url.pathname === "/fix-gist-timestamps") {
+			try {
+				const result = await fixGistTimestamps(env);
+				return new Response(JSON.stringify(result, null, 2), {
+					status: 200,
+					headers: { "content-type": "application/json" },
+				});
+			} catch (e) {
+				return new Response(
+					JSON.stringify({ ok: false, error: String(e) }, null, 2),
+					{ status: 500, headers: { "content-type": "application/json" } }
+				);
+			}
+		}
+
 		try {
 			if (url.pathname === "/health") return new Response("ok");
 			if (!url.pathname.startsWith("/webhook")) {
@@ -1789,6 +1804,95 @@ async function pAll(tasks, concurrency = 4) {
 	}
 	await Promise.all(running);
 }
+// Fix historical timestamps in Gist by rounding to 5-minute intervals
+async function fixGistTimestamps(env) {
+	const gist = await gistGet(env);
+
+	// Find all transition files
+	const transitionFiles = Object.keys(gist.files).filter(name =>
+		name.startsWith('gateways_uptime_transitions_') && name.endsWith('.ndjson')
+	);
+
+	if (!transitionFiles.length) {
+		return { ok: true, message: 'No transition files found', filesFixed: 0, timestampsFixed: 0 };
+	}
+
+	const updates = {};
+	let totalTimestampsFixed = 0;
+	let filesFixed = 0;
+
+	for (const filename of transitionFiles) {
+		const content = await gistReadFileText(env, filename);
+		if (!content) continue;
+
+		const lines = content.split('\n').filter(line => line.trim());
+		let fileTimestampsFixed = 0;
+
+		const fixedLines = lines.map(line => {
+			try {
+				const obj = JSON.parse(line);
+				if (!obj.t) return line;
+
+				// Parse "YYYY-MM-DDTHH:mm:ss" format
+				const m = obj.t.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/);
+				if (!m) return line;
+
+				const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+				const hh = Number(m[4]), mm = Number(m[5]), ss = Number(m[6]);
+				const originalDate = new Date(Date.UTC(y, mo - 1, d, hh, mm, ss));
+
+				// Round to nearest 5 minutes
+				const roundedDate = roundToNearestInterval(originalDate, 5);
+
+				// Format back to Lisboa wall-clock
+				const roundedTs = lisbonWallIso(roundedDate);
+
+				// Check if changed
+				if (obj.t !== roundedTs) {
+					fileTimestampsFixed++;
+					obj.t = roundedTs;
+				}
+
+				return JSON.stringify(obj);
+			} catch (e) {
+				console.error('Failed to process line:', line, e);
+				return line;
+			}
+		});
+
+		if (fileTimestampsFixed > 0) {
+			updates[filename] = { content: fixedLines.join('\n') + '\n' };
+			totalTimestampsFixed += fileTimestampsFixed;
+			filesFixed++;
+		}
+	}
+
+	if (Object.keys(updates).length === 0) {
+		return { ok: true, message: 'No timestamps needed fixing', filesChecked: transitionFiles.length, filesFixed: 0, timestampsFixed: 0 };
+	}
+
+	// Update gist with all changes
+	const url = `${GH_API}/gists/${env.GITHUB_GIST_ID}`;
+	const r = await fetch(url, {
+		method: 'PATCH',
+		headers: { ...ghHeaders(env), 'content-type': 'application/json' },
+		body: JSON.stringify({ files: updates }),
+	});
+
+	if (!r.ok) {
+		const text = await r.text().catch(() => '');
+		throw new Error(`Failed to update gist: ${r.status} ${text}`);
+	}
+
+	return {
+		ok: true,
+		message: 'Successfully fixed historical timestamps',
+		filesChecked: transitionFiles.length,
+		filesFixed,
+		timestampsFixed: totalTimestampsFixed,
+	};
+}
+
 // Build index list (sorted by name) including gwEUI and user-friendly name
 async function buildIndexList(env, NAME_MAP) {
   const base = String(env.RESIOT_BASE || '').trim().replace(/\/+$/, '');
