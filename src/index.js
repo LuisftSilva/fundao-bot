@@ -670,6 +670,8 @@ async function fulfillHistoryRequest(idx, days, env, NAME_MAP) {
 		return ['<i>Falha a obter série — vê os logs.</i>'];
 	}
 
+	const effectiveStart = rec.effectiveStart ? new Date(rec.effectiveStart) : start;
+	const windowDays = Math.max(1, Math.round((now - effectiveStart) / (24 * 60 * 60 * 1000)));
 	const { slots, pctUp, eventsCount, offMs, transitions = [] } = rec;
 	const preview = slots.slice(0, 120);
 	console.log('[history] result', {
@@ -679,6 +681,7 @@ async function fulfillHistoryRequest(idx, days, env, NAME_MAP) {
 		days,
 		stepMin,
 		startIso: start.toISOString(),
+		effectiveStartIso: effectiveStart.toISOString(),
 		endIso: now.toISOString(),
 		eventsCount,
 		slotsLen: slots.length,
@@ -686,10 +689,11 @@ async function fulfillHistoryRequest(idx, days, env, NAME_MAP) {
 		offMs,
 		transitionsCount: transitions.length,
 		slotsPreview: preview,
+		windowDays,
 	});
-	logSlotsHourLines('history', start, slots, stepMin);
+	logSlotsHourLines('history', effectiveStart, slots, stepMin);
 
-	return formatUptimeReport(entry, days, rec, start, now, transitions);
+	return formatUptimeReport(entry, windowDays, rec, effectiveStart, now, transitions);
 }
 
 async function buildDowntimeReport(days, env, NAME_MAP) {
@@ -699,9 +703,11 @@ async function buildDowntimeReport(days, env, NAME_MAP) {
 	const now = new Date();
 	const start = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
 	const stepMin = (days <= 7 ? 5 : 60);
+	const DAY_MS = 24 * 60 * 60 * 1000;
 
 	const rows = [];
 	const gistCache = { carries: new Map(), transitions: new Map() };
+	let summaryStartMs = start.getTime();
 	for (const entry of list.items) {
 		const rec = await fetchSeriesForGateway(env, entry.gwEUI, start, now, stepMin, gistCache);
 		if (!rec.ok) {
@@ -712,20 +718,32 @@ async function buildDowntimeReport(days, env, NAME_MAP) {
 		const downtimeMs = Math.max(0, rec.offMs || 0);
 		const pctDown = Math.max(0, 100 - pctUp);
 		rows.push({ idx: entry.idx, name: entry.name, downtimeMs, pctDown });
+
+		const effectiveStart = rec.effectiveStart ? new Date(rec.effectiveStart) : start;
+		const effMs = effectiveStart.getTime();
+		if (Number.isFinite(effMs) && effMs > summaryStartMs) {
+			summaryStartMs = effMs;
+		}
 	}
 
 	rows.sort((a, b) => a.idx - b.idx);
-	const startStr = formatLisbonDateTime(start);
+	const summaryStart = new Date(summaryStartMs);
+	const startStr = formatLisbonDateTime(summaryStart);
 	const endStr = formatLisbonDateTime(now);
+	const actualDays = Math.max(1, Math.round((now.getTime() - summaryStartMs) / DAY_MS));
 	const summary = [
 		`<b>Downtime overview</b>`,
-		`Período: ${days} dia${days > 1 ? "s" : ""}`,
+		`Período: ${actualDays} dia${actualDays > 1 ? "s" : ""}`,
 		`De: ${escapeHtml(startStr)}`,
 		`Até: ${escapeHtml(endStr)}`
 	].join("\n");
+	const introBlocks = [summary];
+	if (summaryStartMs > start.getTime()) {
+		introBlocks.push("<i>Intervalo limitado ao primeiro registo disponível.</i>");
+	}
 	const tableLines = formatDowntimeTableLines(rows);
 	const tableBlocks = tableLines.length ? chunkLinesIntoPreBlocks(tableLines, TELEGRAM_MAX - 200) : [];
-	return [summary, ...(tableBlocks.length ? tableBlocks : ["<i>Sem dados</i>"])];
+	return [...introBlocks, ...(tableBlocks.length ? tableBlocks : ["<i>Sem dados</i>"])];
 }
 
 function detectMenuShortcut(text) {
@@ -1157,6 +1175,16 @@ function enumerateMonths(start, end) {
 }
 
 async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCache) {
+	const requestedStart = new Date(start);
+	const requestedEnd = new Date(end);
+	if (!(requestedStart instanceof Date) || isNaN(requestedStart)) {
+		return { ok: false, err: "Invalid start date" };
+	}
+	if (!(requestedEnd instanceof Date) || isNaN(requestedEnd)) {
+		return { ok: false, err: "Invalid end date" };
+	}
+	let rangeStart = new Date(requestedStart);
+	const rangeEnd = new Date(requestedEnd);
 
 	// Parse "YYYY-MM-DDTHH:mm:ss" como hora de Lisboa (sem timezone)
 	function parseLisbonWall(ts) {
@@ -1170,11 +1198,23 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCa
 	}
 
 	try {
-		// 1) Enumerate months
-		const months = enumerateMonths(start, end);
+		let earliestRecordMs = null;
+		let earliestRecordState = 0;
+		const rememberEarliest = (ts, state) => {
+			if (!(ts instanceof Date)) return;
+			const ms = ts.getTime();
+			if (!Number.isFinite(ms)) return;
+			if (earliestRecordMs === null || ms < earliestRecordMs) {
+				earliestRecordMs = ms;
+				earliestRecordState = state;
+			}
+		};
+
+		const months = enumerateMonths(requestedStart, rangeEnd);
 
 		// 2) Load monthly carry and transitions
 		let initState = undefined;
+		let initStateTs = null;
 		const events = [];
 		const touched = [];
 
@@ -1215,53 +1255,97 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCa
 
 			const carry = await readCarry(carryName);
 			if (carry && carry.state && Object.prototype.hasOwnProperty.call(carry.state, gwEUI)) {
-				if (initState === undefined) initState = to01(carry.state[gwEUI]);
+				const carryTs = carry?.t0 ? parseLisbonWall(carry.t0) : null;
+				const carryMs = carryTs instanceof Date ? carryTs.getTime() : NaN;
+				const carryState = to01(carry.state[gwEUI]);
+				if (Number.isFinite(carryMs)) {
+					rememberEarliest(carryTs, carryState);
+					if (carryMs <= requestedStart.getTime()) {
+						if (initStateTs === null || carryMs > initStateTs) {
+							initStateTs = carryMs;
+							initState = carryState;
+						}
+					}
+				}
 			}
 
 			const transEntry = await readTransitions(transName);
 			if (transEntry?.hadContent) touched.push(transName);
 			if (transEntry) {
 				const gwEvents = transEntry.byGw.get(gwEUI) || [];
-				for (const obj of gwEvents) events.push(obj);
+				for (const obj of gwEvents) {
+					const ts = parseLisbonWall(obj.t);
+					if (!(ts instanceof Date) || isNaN(ts)) continue;
+					rememberEarliest(ts, to01(obj.s));
+					events.push({ ...obj, _date: ts });
+				}
 			}
 		}
-		if (initState === undefined) initState = 0;
+
+		if (earliestRecordMs !== null && earliestRecordMs > rangeEnd.getTime()) {
+			return { ok: false, err: "Sem histórico no intervalo pedido" };
+		}
+
+		if (initState === undefined) {
+			if (earliestRecordMs !== null) {
+				if (earliestRecordMs > rangeStart.getTime()) {
+					rangeStart = new Date(earliestRecordMs);
+				}
+				initState = earliestRecordState;
+			} else {
+				return { ok: false, err: "Sem histórico disponível" };
+			}
+		}
+
+		if (rangeStart >= rangeEnd) {
+			return { ok: false, err: "Sem intervalo útil para calcular" };
+		}
 
 		// 3) Sort events and count in window
-		events.sort((a, b) => parseLisbonWall(a.t) - parseLisbonWall(b.t));
+		events.sort((a, b) => (a._date?.getTime?.() || 0) - (b._date?.getTime?.() || 0));
 		const transitionsInWindow = events.filter(e => {
-			const tt = parseLisbonWall(e.t);
-			return tt > start && tt <= end;
+			const tt = e._date;
+			if (!(tt instanceof Date)) return false;
+			return tt > rangeStart && tt <= rangeEnd;
 		});
 		const eventsCountInWindow = transitionsInWindow.length;
 
-		console.log('[fetch] events', { gwEUI, months: months.length, files: touched.length, eventsTotal: events.length, eventsInWindow: eventsCountInWindow });
+		console.log('[fetch] events', {
+			gwEUI,
+			months: months.length,
+			files: touched.length,
+			eventsTotal: events.length,
+			eventsInWindow: eventsCountInWindow,
+			startRequested: requestedStart.toISOString(),
+			startUsed: rangeStart.toISOString(),
+		});
 
 		// 4) Determine state at start by applying events up to start
 		let stateAtStart = initState;
 		let iPtr = 0;
-		while (iPtr < events.length && parseLisbonWall(events[iPtr].t) <= start) {
+		while (iPtr < events.length && events[iPtr]._date <= rangeStart) {
 			stateAtStart = to01(events[iPtr].s);
 			iPtr++;
 		}
 
 		// 5) Build intervals over [start, end]
 		const intervals = [];
-		let curT = new Date(start);
+		let curT = new Date(rangeStart);
 		let curS = stateAtStart;
 
 		for (let k = iPtr; k < events.length; k++) {
-			const tEv = parseLisbonWall(events[k].t);
-			if (tEv > end) break;
+			const tEv = events[k]._date;
+			if (!tEv) continue;
+			if (tEv > rangeEnd) break;
 			if (tEv <= curT) { curS = to01(events[k].s); continue; }
 			intervals.push({ from: curT, to: new Date(tEv), s: curS });
 			curT = new Date(tEv);
 			curS = to01(events[k].s);
 		}
-		if (curT < end) intervals.push({ from: curT, to: new Date(end), s: curS });
+		if (curT < rangeEnd) intervals.push({ from: curT, to: new Date(rangeEnd), s: curS });
 
 		// 6) Integrate uptime
-		const totalMs = Math.max(1, end - start);
+		const totalMs = Math.max(1, rangeEnd - rangeStart);
 		let upMs = 0;
 		for (const iv of intervals) {
 			if (iv.s) upMs += (iv.to - iv.from);
@@ -1270,13 +1354,13 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCa
 
 		// 7) Rasterize into slots
 		const stepMs = stepMin * 60 * 1000;
-		const totalSteps = Math.max(1, Math.ceil((end - start) / stepMs));
+		const totalSteps = Math.max(1, Math.ceil((rangeEnd - rangeStart) / stepMs));
 		const slots = new Array(totalSteps).fill(0);
 
 		let j = 0;
 		for (let si = 0; si < totalSteps; si++) {
-			const slotStart = new Date(start.getTime() + si * stepMs);
-			const slotEnd = new Date(Math.min(end.getTime(), slotStart.getTime() + stepMs));
+			const slotStart = new Date(rangeStart.getTime() + si * stepMs);
+			const slotEnd = new Date(Math.min(rangeEnd.getTime(), slotStart.getTime() + stepMs));
 
 			let onMs = 0;
 			while (j < intervals.length && intervals[j].to <= slotStart) j++;
@@ -1293,7 +1377,15 @@ async function fetchSeriesForGateway(env, gwEUI, start, end, stepMin = 5, gistCa
 		}
 
 		const offMs = Math.max(0, totalMs - upMs);
-		return { ok: true, slots, pctUp, eventsCount: eventsCountInWindow, offMs, transitions: transitionsInWindow };
+		return {
+			ok: true,
+			slots,
+			pctUp,
+			eventsCount: eventsCountInWindow,
+			offMs,
+			transitions: transitionsInWindow,
+			effectiveStart: rangeStart,
+		};
 	} catch (e) {
 		return { ok: false, err: String(e) };
 	}
